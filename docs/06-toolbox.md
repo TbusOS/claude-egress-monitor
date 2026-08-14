@@ -122,6 +122,55 @@ IDA / Ghidra / Frida 解决的是「**这个二进制在算什么**」。
 
 ---
 
+## 三点五、证据源分层与置信度
+
+工具用的每个证据源可信度差得很远，所以**结论上会标出这条判断有多硬**：
+
+| 置信度 | 什么时候给这一档 | 例子 |
+|---|---|---|
+| **确证** | 权威来源**直接说的**，不是判断 | 命中 AWS / GCP / Cloudflare **自己发布**的地址段 |
+| **较可能** | 第三方数据源的判断，通常准 | ip-api 的 `hosting` / `mobile` 标志 |
+| **推测** | 只有单一弱线索 | 组织名里有 "cloud"、rDNS 形态像机房 |
+| **判不出** | 什么线索都没有 | 数据源没给标志，组织名和 rDNS 也看不出来 |
+
+### 厂商官方 IP 段（确证级，免费无限制）
+
+| 厂商 | 地址 |
+|---|---|
+| AWS | `ip-ranges.amazonaws.com/ip-ranges.json` |
+| Google Cloud | `gstatic.com/ipranges/cloud.json` |
+| Cloudflare | `cloudflare.com/ips-v4` · `ips-v6` |
+| DigitalOcean | `digitalocean.com/geo/google.csv` |
+| Oracle Cloud | `docs.oracle.com/.../public_ip_ranges.json` |
+
+实测收录约 **2 万个前缀**，拉一遍 4 秒。缓存 24 小时，界面上显示拉取时间，
+可手动刷新 —— 与其猜多久合适，不如把新鲜度摆出来让人自己判断。
+
+**命中 = 一定是机房；没命中 ≠ 一定不是机房。** 这里只覆盖几家大厂，
+小机房、国内 IDC、住宅代理服务商都不在名单里。所以"没命中"只能降级到
+别的证据源，不能当成"这是家宽"。
+
+用它验证过一个之前只是推测的结论：Datadog US5 的 `34.149.66.165`
+命中 **Google Cloud 34.149.0.0/16** —— "US5 跑在 GCP 上"从推测变成确证。
+
+### 其他免费源
+
+- **RDAP**（IETF 标准，RIR 官方，免费无限制）：`https://rdap.apnic.net/ip/<ip>`
+  返回结构化 JSON，带 `name` / `type` / `remarks`。分配注册时写的，
+  比第三方推断可信。
+- **Team Cymru DNS**（已用）：读 BGP 全表，ASN 的权威来源。
+- **开源离线数据集**：`sapics/ip-location-db`（CC0/MIT）、`ipverse/asn-ip`、
+  `X4BNet/lists_vpn`。适合完全离线跑，代价是数据没有实时源新。
+
+### 一个数据源给不了的东西：住宅 vs 企业
+
+免费数据源给的是 `hosting` 这**一个布尔值**——只区分"是不是机房"，
+**没有住宅 vs 企业的维度**。家里的宽带和公司办公室的宽带在这里是同一类。
+
+所以工具里这一档叫 **`non-datacenter`（非机房宽带）**而不是 `residential`——
+叫 residential 是在宣称一个数据源给不了的结论。要真分开得靠付费数据源
+（IPinfo Privacy Detection、IP2Location `usage_type`、MaxMind GeoIP2 ISP）。
+
 ## 四、判断准不准：每个结论都带判据
 
 工具里所有分类结论都带一行「判据」，说明它是怎么得出来的。这不是装饰：

@@ -136,6 +136,12 @@
 
   // ------------------------------------------------------------ 渲染：入口卡
 
+  // p50 / p95 在界面上出现很多次，解释统一放这里当 tooltip。
+  var P50_HINT = '中位数：把所有测量排序后取正中间那个。一半请求比它快，'
+    + '一半比它慢。用它而不是平均值，因为一次抖动就能把平均值拉飞。';
+  var P95_HINT = '第 95 百分位：只有 5% 的请求比它更慢，代表「最糟的日常情况」。'
+    + 'p50 低但 p95 高的链路用起来比两者都中等的更让人烦躁。';
+
   var LEVEL_TONE = {
     'identical': 'atl-chip--up',
     'dual-stack': 'atl-chip',
@@ -147,7 +153,7 @@
   function surfaceCard(card) {
     var body = [];
 
-    body.push(el('div', { class: 'surface-card__head' }, [
+    var head = el('div', { class: 'surface-card__head' }, [
       el('span', { class: 'atl-orb' }, [orbGlyph()]),
       el('span', {}, [
         el('span', { class: 'surface-card__name' }, [card.label]),
@@ -157,24 +163,57 @@
             : (lang() === 'en' ? 'direct' : '直连')
         ])
       ])
-    ]));
+    ]);
+    // 进程在不在跑。这一格是为了让读者知道这张卡是推算还是有对应的实体在跑 ——
+    // 桌面端关着却显示出口，是这个界面最容易被误读的地方。
+    if (card.running) {
+      head.appendChild(biSpan('进程运行中', 'running',
+        'atl-chip atl-chip--up'));
+    } else {
+      head.appendChild(el('span', {
+        class: 'atl-chip',
+        title: (lang() === 'en'
+          ? 'This entry point is not running. The exit below is what it WOULD use, probed via its proxy config.'
+          : '这个入口当前没有进程在跑。下面的出口是「按它的代理配置探测出来的会怎样」，不是观测到的真实流量。')
+      }, [lang() === 'en' ? 'not running' : '未运行']));
+    }
+    head.lastChild.setAttribute('style', 'margin-left:auto;');
+    body.push(head);
 
     var geo = el('div', { class: 'surface-card__geo' }, [
       el('span', { class: 'surface-card__country' }, [
         txt(card.country_label || card.country)
       ])
     ]);
-    if (card.colo) geo.appendChild(el('span', { class: 'atl-chip' }, [card.colo]));
+    if (card.colo) {
+      // colo 是 IATA 机场三字码，标的是**哪个 Cloudflare 边缘机房接待了
+      // 这次请求**，不是"你的出口在哪"。anycast 就近路由所以通常挨得很近，
+      // 但不是一回事 —— 不解释的话读者会把它当成出口位置。
+      geo.appendChild(el('span', {
+        class: 'atl-chip',
+        title: (lang() === 'en'
+          ? 'Cloudflare edge datacenter (IATA airport code) that served this request — close to your exit, but not the same thing as where your exit is.'
+          : 'Cloudflare 边缘机房，用 IATA 机场三字码命名（NRT 东京成田 / SIN 新加坡樟宜 / LAX 洛杉矶…）。它标的是「哪个机房接待了这次请求」，通常离你的出口很近，但不等于出口位置本身。')
+      }, ['colo ' + card.colo]));
+    }
     if (card.family) geo.appendChild(el('span', { class: 'atl-chip' }, [card.family]));
     if (card.restricted) {
       geo.appendChild(biSpan('受限地区', 'restricted', 'atl-chip atl-chip--down'));
     }
-    // 机房 / 家宽 —— 这是风控权重差别最大的一个属性
+    // 机房 / 家宽 —— 这是风控权重差别最大的一个属性。
+    // 后面必须跟置信度：「厂商官方地址段命中」和「组织名里有 cloud 这个词」
+    // 都会显示成"机房"，但可信度差着两个数量级。不标出来读者没法判断。
     if (card.kind && card.kind !== 'unknown') {
       geo.appendChild(el('span', {
         class: 'atl-chip' + (card.kind === 'datacenter' ? ' atl-chip--warn' : ''),
         title: card.kind_evidence || ''
       }, [card.kind_label || card.kind]));
+      if (card.confidence_label) {
+        geo.appendChild(el('span', {
+          class: 'atl-chip' + (card.confidence === 'confirmed' ? ' atl-chip--up' : ''),
+          title: card.kind_evidence || ''
+        }, [card.confidence_label]));
+      }
     }
     if (card.proxy_flagged) {
       geo.appendChild(biSpan('已知代理库', 'listed proxy', 'atl-chip atl-chip--down'));
@@ -523,8 +562,8 @@
           ]),
           el('td', {}, [r.path_label]),
           el('td', { class: 'atl-table__num' }, [String(r.n)]),
-          el('td', { class: 'atl-table__num' }, [ms(r.p50)]),
-          el('td', { class: 'atl-table__num' }, [ms(r.p95)]),
+          el('td', { class: 'atl-table__num', title: P50_HINT }, [ms(r.p50)]),
+          el('td', { class: 'atl-table__num', title: P95_HINT }, [ms(r.p95)]),
           el('td', { class: 'atl-table__num' }, [ms(r.min)]),
           el('td', { class: 'atl-table__num' }, [ms(r.max)])
         ]));

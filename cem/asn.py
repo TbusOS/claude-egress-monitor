@@ -221,6 +221,8 @@ def _merge(base: Optional[AsnInfo], extra: Optional[AsnInfo]) -> Optional[AsnInf
         mobile=base.mobile if base.mobile is not None else extra.mobile,
         proxy_flag=(base.proxy_flag if base.proxy_flag is not None
                     else extra.proxy_flag),
+        cloud_provider=base.cloud_provider or extra.cloud_provider,
+        cloud_prefix=base.cloud_prefix or extra.cloud_prefix,
         timezone=base.timezone or extra.timezone,
         loc=base.loc or extra.loc,
         rdns=base.rdns or extra.rdns,
@@ -232,9 +234,11 @@ def _merge(base: Optional[AsnInfo], extra: Optional[AsnInfo]) -> Optional[AsnInf
 class AsnCache:
     """线程安全的磁盘缓存。采样线程和 HTTP 线程会同时查。"""
 
-    def __init__(self, path: Optional[FsPath] = None, *, want_city: bool = True):
+    def __init__(self, path: Optional[FsPath] = None, *, want_city: bool = True,
+                 cloud=None):
         self._path = path
         self._want_city = want_city
+        self._cloud = cloud
         self._lock = threading.Lock()
         self._mem: dict[str, AsnInfo] = {}
         if path and path.exists():
@@ -295,6 +299,14 @@ class AsnCache:
         rdns = lookup_rdns(ip)
         if rdns:
             info = _merge(info, AsnInfo(ip=ip, rdns=rdns, source="rdns"))
+        # 厂商官方地址段：命中就是确证级证据，优先级高于所有第三方判断。
+        if self._cloud is not None:
+            hit = self._cloud.lookup(ip)
+            if hit:
+                info = _merge(info, AsnInfo(
+                    ip=ip, cloud_provider=hit.provider,
+                    cloud_prefix=hit.prefix, source="cloud-ranges",
+                ))
 
         with self._lock:
             self._mem = {**self._mem, ip: info}

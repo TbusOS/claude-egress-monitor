@@ -196,16 +196,21 @@ class TestIpKind(unittest.TestCase):
         info = AsnInfo(ip="x", hosting=True, org="Some Telecom Broadband")
         self.assertEqual(info.kind, "datacenter")
 
-    def test_explicit_non_hosting_is_residential(self):
+    def test_explicit_non_hosting_is_non_datacenter(self):
+        """这一档叫 non-datacenter 而不是 residential 是有意的：
+        免费数据源只给「是不是机房」一个布尔值，没有住宅 vs 企业的维度，
+        叫 residential 是在宣称一个数据源给不了的结论。"""
         info = AsnInfo(ip="x", hosting=False, mobile=False)
-        self.assertEqual(info.kind, "residential")
+        self.assertEqual(info.kind, "non-datacenter")
+        self.assertIn("只能到这一档", info.kind_evidence)
 
     def test_mobile_wins(self):
         self.assertEqual(AsnInfo(ip="x", hosting=True, mobile=True).kind, "mobile")
 
     def test_heuristic_from_org_name(self):
         self.assertEqual(AsnInfo(ip="x", org="Contabo GmbH").kind, "datacenter")
-        self.assertEqual(AsnInfo(ip="x", org="Acme Broadband").kind, "residential")
+        self.assertEqual(AsnInfo(ip="x", org="Acme Broadband").kind,
+                         "non-datacenter")
 
     def test_unknown_is_not_guessed(self):
         """判不出来就说判不出来。把机房猜成家宽会让人以为风险更低，
@@ -251,6 +256,18 @@ class TestPathTrace(unittest.TestCase):
     def test_bad_json_is_empty_not_an_exception(self):
         self.assertEqual(pathtrace.parse_mtr_json("nope"), ())
         self.assertEqual(pathtrace.parse_mtr_json('{"report":{}}'), ())
+
+    def test_permission_failure_is_translated(self):
+        """mtr 的原始报错是 "Failure to start mtr-packet: Invalid argument"，
+        完全看不出是权限问题。不翻译的话使用者会以为是装坏了。"""
+        got = pathtrace.explain_failure(
+            "mtr: Failure to start mtr-packet: Invalid argument", 1)
+        self.assertIn("root 权限", got)
+        self.assertIn("chmod u+s", got)
+
+    def test_other_errors_pass_through(self):
+        got = pathtrace.explain_failure("mtr: unknown host nope.invalid", 1)
+        self.assertIn("unknown host", got)
 
     def test_missing_binary_degrades_gracefully(self):
         """没装 mtr 是降级，不是报错 —— 一个可选增强不该让主流程失败。"""

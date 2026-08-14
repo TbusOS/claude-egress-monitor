@@ -250,8 +250,9 @@ def snapshot(
     asn_lookup=None,
     proxy: Optional[tuple[str, int]] = None,
     endpoint_lookup=None,
+    surfaces: Optional[dict[int, str]] = None,
 ) -> tuple[tuple[Connection, ...], int, int]:
-    surfaces = discover_surface_pids()
+    surfaces = discover_surface_pids() if surfaces is None else surfaces
     text = run_lsof(tuple(surfaces))
     rows = parse_lsof(text, surfaces)
     conns = build_connections(

@@ -397,6 +397,11 @@
           </div>
         </div>
 
+        <p class="atl-muted" style="margin:0 0 var(--space-4); font-size:12.5px; line-height:1.66; max-width:80ch;">
+          <span class="lang-zh">下面三张卡回答的是「<strong>如果这个入口现在发流量，会从哪出去</strong>」—— 工具用和该入口<strong>相同的代理配置</strong>自己发了一次探测。所以进程没在跑，卡片照样有值。想看「<strong>它此刻正连着谁</strong>」，去左边的「实时连接」，那里才是真实观测。</span>
+          <span class="lang-en">These three cards answer “<strong>where would this entry point exit if it sent traffic now</strong>” — the tool probes using that entry point's own proxy config. A card has a value even when the process is not running. For “<strong>what is it connected to right now</strong>”, see Live sockets — that one is observation.</span>
+        </p>
+
         <!-- 三个入口各自的出口 -->
         <div class="atl-grid atl-grid--3" data-cem="surface-grid" data-reveal data-reveal-delay="60">
           <!-- 由 app.js 按 /api/state 填充；未开监控时是下面这个空状态。 -->
@@ -656,9 +661,15 @@
 
         <div class="atl-card atl-card--flush" data-reveal>
           <div class="atl-card__head" style="padding:var(--space-5) var(--space-5) 0; margin-bottom:var(--space-3);">
-            <h2 class="atl-card__title">
-              <span class="lang-zh">分位数（按当前窗口）</span><span class="lang-en">Percentiles over the current window</span>
-            </h2>
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">分位数（按当前窗口）</span><span class="lang-en">Percentiles over the current window</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:12.5px; max-width:78ch;">
+                <span class="lang-zh"><strong>p50</strong> 是中位数——把所有测量排序后取正中间那个，一半请求比它快、一半比它慢。用它而不是平均值，因为一次抖动就能把平均值拉飞。<strong>p95</strong> 是第 95 百分位，只有 5% 的请求比它更慢，代表「最糟的日常情况」。<strong>n</strong> 太小时分位数没有统计意义，n=3 的 p95 基本就等于最大值。</span>
+                <span class="lang-en"><strong>p50</strong> is the median — sort every measurement and take the middle one; half the requests are faster, half slower. It is used instead of the mean because a single spike drags a mean anywhere. <strong>p95</strong> means only 5% of requests are slower, i.e. the worst everyday case. With a small <strong>n</strong> percentiles carry no statistical weight: at n=3, p95 is essentially the max.</span>
+              </p>
+            </div>
           </div>
           <div class="atl-scroll">
             <table class="atl-table">

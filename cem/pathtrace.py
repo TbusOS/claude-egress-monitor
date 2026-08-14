@@ -164,13 +164,40 @@ def trace(target: str, *, cycles: int = 5, timeout: float = 40.0) -> PathReport:
         return PathReport(target=target, ok=False,
                           error=f"{type(exc).__name__}: {exc}")
     if proc.returncode != 0 and not proc.stdout.strip():
-        msg = (proc.stderr or "").strip().splitlines()
         return PathReport(target=target, ok=False,
-                          error=msg[-1] if msg else f"mtr 退出码 {proc.returncode}")
+                          error=explain_failure(proc.stderr or "",
+                                                proc.returncode))
     hops = parse_mtr_json(proc.stdout)
     if not hops:
         return PathReport(target=target, ok=False, error="mtr 没有返回可用的跳信息")
     return PathReport(target=target, ok=True, hops=hops)
+
+
+# macOS 上装完 mtr 之后最常见的一堵墙。原始报错是
+# "Failure to start mtr-packet: Invalid argument"，完全看不出是权限问题 ——
+# 直接跑 mtr-packet 才会看到真正的原因 "Failure to open IPv4 sockets"。
+# 把这层翻译出来，否则使用者会以为是装坏了。
+PERMISSION_HINT = (
+    "mtr 需要 root 权限才能发 ICMP 探测包（开 raw socket），"
+    "当前以普通用户跑不起来。两种解法：\n"
+    "  A. 手动跑时加 sudo：sudo mtr --json -n -c 5 -- claude.ai\n"
+    "  B. 给它 setuid，之后普通用户可直接跑（改系统文件权限，自己权衡）：\n"
+    "     sudo chown root $(brew --prefix)/sbin/mtr-packet\n"
+    "     sudo chmod u+s $(brew --prefix)/sbin/mtr-packet\n"
+    "本工具默认按普通用户调用 —— 一个监控工具不该要求你用 sudo 跑它自己。"
+)
+
+
+def explain_failure(stderr: str, returncode: int) -> str:
+    """把 mtr 的原始报错翻译成能照着做的说明。纯函数。"""
+    blob = (stderr or "").lower()
+    if ("failure to start mtr-packet" in blob
+            or "failure to open" in blob
+            or "operation not permitted" in blob
+            or "permission denied" in blob):
+        return PERMISSION_HINT
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    return lines[-1] if lines else f"mtr 退出码 {returncode}"
 
 
 def summarize(report: PathReport) -> dict:
@@ -200,7 +227,9 @@ __all__ = [
     "Hop",
     "LOSS_WARN_PCT",
     "PathReport",
+    "PERMISSION_HINT",
     "available",
+    "explain_failure",
     "parse_mtr_json",
     "summarize",
     "trace",

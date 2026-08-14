@@ -57,6 +57,10 @@ class AsnInfo:
     hosting: Optional[bool] = None     # 机房 / 云主机
     mobile: Optional[bool] = None      # 移动蜂窝网络
     proxy_flag: Optional[bool] = None  # 已知代理 / VPN 出口
+    # 命中了哪家云厂商**自己发布**的地址段。这是唯一一个"确证"级证据：
+    # AWS 说这个段是它的，那就是它的，不存在判断失误。
+    cloud_provider: Optional[str] = None
+    cloud_prefix: Optional[str] = None
     source: Optional[str] = None
 
     # ── 出口类型：机房还是家宽 ──────────────────────────────────
@@ -65,9 +69,44 @@ class AsnInfo:
     # 和一个家宽出口的风险完全不是一回事。
 
     KIND_DATACENTER = "datacenter"
-    KIND_RESIDENTIAL = "residential"
+    # 注意这一档叫 non-datacenter 而不是 residential：免费数据源给的是
+    # `hosting` 布尔值，它只区分"是不是机房"，**没有住宅 vs 企业这个维度**。
+    # 家里的宽带和公司办公室的宽带在这里是同一档，公开的 BGP / WHOIS
+    # 数据里也没有可靠标志能把它们分开。能分的数据源（IPinfo Privacy
+    # Detection、IP2Location usage_type、MaxMind ISP）都要付费。
+    KIND_RESIDENTIAL = "non-datacenter"
     KIND_MOBILE = "mobile"
     KIND_UNKNOWN = "unknown"
+
+    # ── 置信度：结论到底有多硬 ──────────────────────────────────
+    # 不标出来的话，「厂商官方地址段命中」和「组织名里有 cloud 这个词」
+    # 会长得一模一样，而它们的可信度差着两个数量级。
+    CONF_CONFIRMED = "confirmed"   # 权威来源直接说的，不是判断
+    CONF_LIKELY = "likely"         # 第三方数据源的判断，通常准
+    CONF_GUESS = "guess"           # 只有单一弱线索（组织名 / rDNS 形态）
+    CONF_UNKNOWN = "unknown"       # 判不出来
+
+    CONF_LABEL = {
+        CONF_CONFIRMED: "确证",
+        CONF_LIKELY: "较可能",
+        CONF_GUESS: "推测",
+        CONF_UNKNOWN: "判不出",
+    }
+
+    @property
+    def kind_confidence(self) -> str:
+        """这个 kind 判断有多硬。"""
+        if self.cloud_provider:
+            return self.CONF_CONFIRMED
+        if self.mobile or self.hosting is not None:
+            return self.CONF_LIKELY
+        if self._guess_kind() != self.KIND_UNKNOWN:
+            return self.CONF_GUESS
+        return self.CONF_UNKNOWN
+
+    @property
+    def kind_confidence_label(self) -> str:
+        return self.CONF_LABEL[self.kind_confidence]
 
     @property
     def kind(self) -> str:
@@ -77,6 +116,9 @@ class AsnInfo:
         判不出来就返回 unknown —— **不猜**，因为猜错的方向正好是最危险的
         那个：把机房猜成家宽会让人以为风险更低。
         """
+        # 厂商官方地址段最硬，排最前面
+        if self.cloud_provider:
+            return self.KIND_DATACENTER
         if self.mobile:
             return self.KIND_MOBILE
         if self.hosting:
@@ -105,12 +147,19 @@ class AsnInfo:
     @property
     def kind_evidence(self) -> str:
         """这个判断是从哪来的。没有它，读者无法判断该不该信。"""
+        if self.cloud_provider:
+            return (f"命中 {self.cloud_provider} 官方发布的地址段 "
+                    f"{self.cloud_prefix or ''} —— 这是厂商自己承认的，"
+                    f"不是第三方推断")
         if self.mobile:
             return "数据源标记为移动蜂窝网络"
         if self.hosting is True:
             return "数据源标记为机房 / 托管网络"
         if self.hosting is False and self.mobile is False:
-            return "数据源明确标记为非机房、非移动 —— 即住宅或企业宽带"
+            return ("数据源标记为非机房、非移动。它只能到这一档 —— "
+                    "免费数据源给的是「是不是机房」这一个布尔值，没有"
+                    "「住宅 vs 企业」的维度，所以家里的宽带和公司办公室的"
+                    "宽带在这里分不开。要分得靠付费数据源。")
         if self._guess_kind() == self.KIND_UNKNOWN:
             return "数据源没给分类标志，组织名和 rDNS 也看不出来 —— 不猜"
         return "数据源没给标志，按组织名 / rDNS 形态推断（可信度较低）"
@@ -263,6 +312,12 @@ class Sample:
     traces: tuple[TraceView, ...] = ()
     resolves: tuple[ResolveView, ...] = ()
     connections: tuple[Connection, ...] = ()
+    # 每个入口当前有几个进程在跑。用来区分界面上两件**完全不同**的事：
+    #   出口卡  = 「如果这个入口现在发流量，会从哪出去」（按它的代理配置探测）
+    #   实时连接 = 「它此刻正连着谁」（lsof 真实观测）
+    # 桌面端没运行时出口卡照样有值 —— 那是推算，不是观测。
+    # 不把这件事写在界面上，读者会把推算当成观测。
+    processes: tuple[tuple[str, int], ...] = ()
     checks: tuple[Check, ...] = ()
     notes: tuple[str, ...] = ()
 

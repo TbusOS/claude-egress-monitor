@@ -35,6 +35,8 @@ class SamplerConfig:
     include_telemetry: bool = True
     with_resolve: bool = True
     with_sockets: bool = True
+    # 路径质量要跑 mtr，一次好几秒。默认关 —— 它是诊断动作，不是采样动作。
+    with_path: bool = False
     timeout: float = 8.0
 
     def with_interval(self, seconds: int) -> "SamplerConfig":
@@ -44,6 +46,7 @@ class SamplerConfig:
             include_telemetry=self.include_telemetry,
             with_resolve=self.with_resolve,
             with_sockets=self.with_sockets,
+            with_path=self.with_path,
             timeout=self.timeout,
         )
 
@@ -178,6 +181,7 @@ class Sampler:
             include_telemetry=cfg.include_telemetry,
             with_resolve=cfg.with_resolve,
             with_sockets=cfg.with_sockets,
+            with_path=cfg.with_path,
             asn_cache=self._asn,
             timeout=cfg.timeout,
         )

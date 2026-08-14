@@ -255,11 +255,46 @@ def check_timezone_fit(sample: Optional[Sample]) -> Optional[Check]:
     )
 
 
+def check_path_quality(target: str = "claude.ai",
+                       *, cycles: int = 3) -> Optional[Check]:
+    """路径质量：跳数、端到端丢包、抖动。需要 mtr，没装或没权限就说清楚。
+
+    这一项补的是四段延迟答不了的那个问题：TLS 握手忽快忽慢，
+    是距离远还是链路在丢包。
+    """
+    from . import pathtrace
+    if not pathtrace.available():
+        return Check(
+            id="path", label="路径质量", ok=False, value="未安装 mtr",
+            severity=SEV_INFO,
+            detail="装了 mtr 之后这里会显示跳数、每跳延迟和端到端丢包 —— "
+                   "那是四段延迟答不了的维度（TLS 忽快忽慢是距离远还是丢包）。"
+                   "跑 scripts/install-deps.sh 安装。其余功能不受影响。",
+        )
+    report = pathtrace.trace(target, cycles=cycles)
+    if not report.ok:
+        return Check(
+            id="path", label="路径质量", ok=False, value="跑不起来",
+            severity=SEV_INFO, detail=report.error or "未知错误",
+        )
+    loss = report.end_to_end_loss
+    sev = SEV_OK if (loss or 0) < pathtrace.LOSS_WARN_PCT else SEV_WARN
+    return Check(
+        id="path", label="路径质量", ok=(sev == SEV_OK),
+        value=f"{report.hop_count} 跳 · 丢包 {loss}% · 抖动 {report.jitter_ms}ms",
+        severity=sev,
+        detail=(f"到 {target} 共 {report.hop_count} 跳，终点丢包 {loss}%。"
+                "注意：中间跳显示的丢包大多是路由器给 ICMP 限速造成的假象，"
+                "只有终点的丢包才算数 —— 看到中间某跳 40% 就去换节点，换了也没用。"),
+    )
+
+
 def run_all(
     sample: Optional[Sample] = None,
     *,
     proxy: Optional[tuple[str, int]] = None,
     with_network: bool = True,
+    with_path: bool = False,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> tuple[Check, ...]:
     """跑完所有环境检查。
@@ -276,6 +311,11 @@ def run_all(
         alive = check_proxy_alive(proxy)
         if alive:
             out.append(alive)
+    # 路径质量单独一个开关：mtr 一次要跑好几秒，不该跟着每轮采样跑。
+    if with_path:
+        got = check_path_quality()
+        if got:
+            out.append(got)
     for maker in (check_clock, check_certificates, check_timezone_fit):
         got = maker(sample)
         if got:
@@ -293,6 +333,7 @@ __all__ = [
     "check_clock",
     "check_doh_consistency",
     "check_ipv6",
+    "check_path_quality",
     "check_proxy_alive",
     "check_timezone_fit",
     "run_all",

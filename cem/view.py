@@ -94,6 +94,13 @@ def _asn_payload(info) -> Optional[dict]:
         "city": info.city, "region": info.region, "where": info.where,
         "timezone": info.timezone, "rdns": info.rdns, "prefix": info.prefix,
         "anycast": info.anycast, "source": info.source,
+        "kind": info.kind,
+        "kind_label": dx.KIND_LABEL.get(info.kind, info.kind),
+        "kind_evidence": info.kind_evidence,
+        "confidence": info.kind_confidence,
+        "confidence_label": info.kind_confidence_label,
+        "cloud_provider": info.cloud_provider,
+        "cloud_prefix": info.cloud_prefix,
     }
 
 
@@ -128,6 +135,7 @@ def surface_cards(sample: Optional[Sample],
     （单一出口 / 同节点双栈 / 同网多址 / 跨网 / 跨国）。
     """
     profiles = dx.egress_profile(sample) if sample else {}
+    procs = dict(sample.processes) if sample else {}
     asn_by_ip = {}
     if sample:
         for t in sample.traces:
@@ -168,12 +176,22 @@ def surface_cards(sample: Optional[Sample],
             "kind_label": (dx.KIND_LABEL.get(primary.kind) if primary else None),
             "kind_meaning": (dx.KIND_MEANING.get(primary.kind) if primary else None),
             "kind_evidence": primary.kind_evidence if primary else None,
+            "confidence": (info.kind_confidence if info else None),
+            "confidence_label": (info.kind_confidence_label if info else None),
+            "cloud_provider": (info.cloud_provider if info else None),
             "proxy_flagged": bool(primary and primary.proxy_flagged),
             "city": primary.city if primary else None,
             "addresses": ([_address_payload(a, asn_by_ip) for a in prof.addresses]
                           if prof else []),
             "countries": list(prof.countries) if prof else [],
             "restricted": bool(prof and prof.restricted),
+            # 这张卡是「按这个入口的代理配置探测出来的结果」，
+            # 不是「观测到这个入口发出的流量」。进程没跑时照样有值。
+            # 不写清楚，读者会把推算当观测 —— 桌面端关着却显示出口，
+            # 是这个界面最容易误导人的地方。
+            "measured_how": "probe-as-configured",
+            "processes": procs.get(surface, 0),
+            "running": procs.get(surface, 0) > 0,
         })
     return cards
 

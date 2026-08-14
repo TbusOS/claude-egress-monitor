@@ -303,6 +303,7 @@ def run_once(
     with_resolve: bool = True,
     with_sockets: bool = True,
     with_checks: bool = True,
+    with_path: bool = False,
     asn_cache: Optional[AsnCache] = None,
     timeout: float = 8.0,
     on_note: Optional[Callable[[str], None]] = None,
@@ -326,6 +327,14 @@ def run_once(
             resolve_view(h, dns_table=dns_table) for h in hosts
         )
 
+    # 进程数总是要数的（出口卡要用），即使跳过了连接枚举。
+    surface_pids = sockmod.discover_surface_pids()
+    process_counts = tuple(sorted(
+        (surface, sum(1 for _p, s_ in surface_pids.items() if s_ == surface))
+        for surface in (pathmod.SURFACE_CLI, pathmod.SURFACE_DESKTOP,
+                        pathmod.SURFACE_WEB)
+    ))
+
     connections: tuple = ()
     socket_notes: tuple[str, ...] = ()
     if with_sockets:
@@ -339,6 +348,7 @@ def run_once(
             asn_lookup=lookup,
             proxy=(cli_path.proxy if cli_path else None),
             endpoint_lookup=ep.classify_host,
+            surfaces=surface_pids,
         )
         if via_proxy:
             socket_notes = socket_notes + (
@@ -358,6 +368,7 @@ def run_once(
         traces=traces,
         resolves=resolves,
         connections=connections,
+        processes=process_counts,
     )
 
     # 环境级检查放在最后：时钟、证书、时区都要读已经采好的 trace。
@@ -368,6 +379,7 @@ def run_once(
         proxy=(desktop_path.proxy if desktop_path else
                (cli_path.proxy if cli_path else None)),
         with_network=with_checks,
+        with_path=with_path,
         timeout=timeout,
     )
 
@@ -377,7 +389,8 @@ def run_once(
             on_note(n)
     return Sample(
         ts=sample.ts, seq=seq, traces=traces, resolves=resolves,
-        connections=connections, checks=checks, notes=notes,
+        connections=connections, processes=process_counts,
+        checks=checks, notes=notes,
     )
 
 

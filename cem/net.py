@@ -24,6 +24,10 @@ from .model import Timing
 DEFAULT_TIMEOUT = 8.0
 DEFAULT_UA = "claude-egress-monitor/0.1 (+https://github.com/)"
 MAX_BODY = 64 * 1024
+# 探测响应几百字节就够，64KB 是给意外情况留的余量。但有些数据源
+# （AWS 的官方 IP 段清单 2.5MB）本来就很大，截断了会静默解析失败 ——
+# 症状是"这个源解析不出前缀"，看不出是截断造成的。所以要能按需放开。
+MAX_BODY_LARGE = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -259,8 +263,9 @@ def timed_get(
     timeout: float = DEFAULT_TIMEOUT,
     family: int = 0,
     headers: Optional[dict[str, str]] = None,
+    max_body: int = MAX_BODY,
 ) -> HttpResult:
-    """发一次 GET，返回分段耗时 + 实际对端地址 + 响应体（截断到 64KB）。
+    """发一次 GET，返回分段耗时 + 实际对端地址 + 响应体。
 
     family 传 socket.AF_INET / AF_INET6 可以强制协议族 —— 同一个域名
     走 v4 和走 v6 出口可能落在不同国家，这个参数就是为了把这件事量出来。
@@ -344,8 +349,8 @@ def timed_get(
         declared = resp_headers.get("content-length")
         want = None
         if declared and declared.isdigit():
-            want = min(int(declared), MAX_BODY)
-        while len(body) < MAX_BODY and (want is None or len(body) < want):
+            want = min(int(declared), max_body)
+        while len(body) < max_body and (want is None or len(body) < want):
             chunk = sock.recv(8192)
             if not chunk:
                 break

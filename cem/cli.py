@@ -39,9 +39,20 @@ def _fmt(value: object, unit: str = "") -> str:
     return f"{value}{unit}"
 
 
-def _asn_cache(cache_dir: Optional[Path]) -> AsnCache:
+def _asn_cache(cache_dir: Optional[Path], *, with_cloud: bool = True) -> AsnCache:
+    """造一个 ASN 缓存，顺带挂上云厂商官方地址段。
+
+    云段是判定「是不是机房」最硬的证据（厂商自己发布的清单），
+    所以默认启用。清单过期（24 小时）会自动重拉，界面上显示拉取时间。
+    """
     path = (cache_dir / "asn-cache.json") if cache_dir else None
-    return AsnCache(path)
+    cloud = None
+    if with_cloud:
+        from .cloudranges import CloudRanges
+        cloud = CloudRanges((cache_dir / "cloud-ranges.json") if cache_dir else None)
+        if not cloud.fresh:
+            cloud.refresh()
+    return AsnCache(path, cloud=cloud)
 
 
 # ------------------------------------------------------------------ doctor
@@ -142,7 +153,8 @@ def _print_sample(sample: Sample, routes: tuple[pathmod.Path, ...]) -> None:
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
-    cache = _asn_cache(Path(args.cache_dir) if args.cache_dir else None)
+    cache = _asn_cache(Path(args.cache_dir) if args.cache_dir else None,
+                       with_cloud=not args.no_cloud_ranges)
     routes = pathmod.discover()
     sample = probe.run_once(
         seq=1,
@@ -151,6 +163,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
         include_telemetry=not args.no_telemetry,
         with_resolve=not args.no_dns,
         with_sockets=not args.no_sockets,
+        with_path=args.path_quality,
         asn_cache=cache,
         timeout=args.timeout,
     )
@@ -262,7 +275,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     archive_dir = (None if args.no_archive
                    else Path(args.archive).expanduser())
     day_store = DayStore(archive_dir)
-    cache = _asn_cache(Path(args.cache_dir) if args.cache_dir else None)
+    cache = _asn_cache(Path(args.cache_dir) if args.cache_dir else None,
+                       with_cloud=not args.no_cloud_ranges)
     sampler = Sampler(
         history,
         day_store=day_store,
@@ -272,6 +286,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             include_telemetry=not args.no_telemetry,
             with_resolve=not args.no_dns,
             with_sockets=not args.no_sockets,
+            with_path=args.path_quality,
         ),
         asn_cache=cache,
     )
@@ -327,7 +342,11 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--no-sockets", action="store_true",
                         help="跳过实时连接枚举（不调用 lsof）")
     common.add_argument("--cache-dir", default=None,
-                        help="ASN 查询缓存目录，不给则只用内存缓存")
+                        help="ASN / 云段缓存目录，不给则只用内存缓存")
+    common.add_argument("--path-quality", action="store_true",
+                        help="每轮跑一次 mtr 量跳数 / 丢包（慢几秒，需 mtr 且要权限）")
+    common.add_argument("--no-cloud-ranges", action="store_true",
+                        help="不拉云厂商官方 IP 段（少一个确证级证据源）")
 
     p_doctor = sub.add_parser("doctor", help="看清本机三个入口各走哪条路")
     p_doctor.set_defaults(func=cmd_doctor)
