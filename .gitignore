@@ -1,0 +1,37 @@
+# ── 采样输出：一定包含真实 IP / 主机名 / 进程名，绝不入库 ─────────────
+# 这条是本仓最重要的一条忽略规则。工具的产物就是"你的网络长什么样"，
+# 提交上去等于把自己的出口、代理端口、内网地址公开。
+data/
+*.jsonl
+*.ndjson
+runs/
+snapshots/
+*.local.json
+*.local.md
+*.local.yaml
+
+# 缓存
+.cache/
+asn-cache.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS / 编辑器
+.DS_Store
+.idea/
+.vscode/
+
+# 设计闸产物（design-review 会往页面同级写 shots/）
+screenshots/
+shots/
+web/shots/
+*-audit.json
+pixel-baseline/*.actual.png

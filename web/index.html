@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="zh" data-lang="zh" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude 出网监控台</title>
+<meta name="description" content="看清 Claude Code、桌面端、网页三个入口各自的出口 IP、落地地区、遥测目的地和访问延迟。本机运行，数据不外发。">
+<!-- 相对路径：这个页面既要能被本机服务器按 http 提供，也要能直接用
+     file:// 打开做静态检查。绝对路径在 file:// 下会解析到文件系统根。 -->
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/atelier.css">
+<style>
+  html[data-lang="en"] .lang-zh { display: none !important; }
+  html[data-lang="zh"] .lang-en { display: none !important; }
+
+  /* 页面局部样式一律用无前缀 class —— 结构闸只校验 atl-* 是否有定义。 */
+  .page-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-5);
+  }
+  .head-tools { display: flex; align-items: center; gap: var(--space-3); }
+
+  .monitor-switch { display: flex; align-items: center; gap: var(--space-3); }
+  .monitor-switch__text { display: block; }
+  .monitor-switch__label {
+    display: block; font-size: 13px; font-weight: 700; color: var(--atl-ink);
+  }
+  .monitor-switch__hint {
+    display: block; font-size: 11.5px; color: var(--atl-ink-2);
+  }
+
+  .surface-card { display: flex; flex-direction: column; gap: var(--space-3); }
+  .surface-card__head { display: flex; align-items: center; gap: var(--space-4); }
+  .surface-card__name { display: block; font-size: 15px; font-weight: 700; }
+  .surface-card__route { display: block; font-size: 11.5px; color: var(--atl-ink-2); }
+  .surface-card__ip {
+    display: block; font-family: var(--font-mono); font-size: 13px;
+    font-variant-numeric: tabular-nums; word-break: break-all; line-height: 1.5;
+  }
+  .surface-card__geo {
+    display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap;
+  }
+  .surface-card__country {
+    font-size: 25px; font-weight: 700; letter-spacing: -0.025em;
+  }
+
+  .chart-body { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: var(--space-3); }
+  .phase-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--space-4); align-items: center; }
+  .phase-row + .phase-row { margin-top: var(--space-3); }
+  /* 遥测行做成两行：主机名独占一行，进度条和判定在下一行。
+     早先是左右并排，`browser-intake-us5-datadoghq.com` 被折成
+     "browser-intake-us5-d / atadoghq.com" —— 主机名断在单词中间就读不出来了。 */
+  .tele-row { display: block; }
+  .tele-row + .tele-row {
+    margin-top: var(--space-4); padding-top: var(--space-4);
+    border-top: 1px solid var(--atl-line);
+  }
+  .tele-row__host {
+    display: block; font-family: var(--font-mono); font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+  .tele-row__bottom {
+    display: flex; align-items: center; gap: var(--space-3); margin-top: 8px;
+  }
+  .tele-row__meta {
+    font-size: 12px; color: var(--atl-ink-2);
+    font-variant-numeric: tabular-nums; flex: none; min-width: 58px;
+  }
+
+  /* 结论卡比它旁边那张矮，栅格会把它拉到等高，底部空出一大块。
+     把脚注推到底：留白要填信息，不填装饰。 */
+  .findings { display: flex; flex-direction: column; }
+  .findings__foot { margin-top: auto; padding-top: var(--space-5); }
+
+  .note-item { display: flex; gap: var(--space-3); }
+  .note-item + .note-item { margin-top: var(--space-4); }
+  .note-item__dot {
+    width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+    display: block; flex: none; margin-top: 7px; opacity: 0.75;
+  }
+  .note-item__text { display: block; font-size: 13.5px; line-height: 1.62; }
+
+  .inv-card { display: flex; gap: var(--space-4); align-items: flex-start; }
+  .inv-card__text { display: block; min-width: 0; }
+  .inv-card__host {
+    display: block; font-family: var(--font-mono); font-size: 12.5px;
+    font-weight: 500; word-break: break-all;
+  }
+  .inv-card__why { display: block; font-size: 12.5px; color: var(--atl-ink-2); margin-top: 6px; line-height: 1.6; }
+  .inv-card__tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+  .empty {
+    padding: var(--space-6) 0; text-align: center;
+  }
+  .empty__title { display: block; font-size: 14.5px; font-weight: 700; }
+  .empty__hint {
+    display: block; font-size: 13px; color: var(--atl-ink-2);
+    margin-top: 8px; line-height: 1.6;
+  }
+
+  .wrap-mono { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<div class="atl-wall"></div>
+
+<div class="atl-page atl-page--wide">
+
+  <div class="page-head">
+    <span class="atl-kicker">
+      <span class="lang-zh">claude-egress-monitor · 本机运行 · 数据不外发</span>
+      <span class="lang-en">claude-egress-monitor · runs locally · nothing leaves this machine</span>
+    </span>
+    <div class="head-tools">
+      <div class="atl-langtoggle lang-toggle">
+        <button type="button" data-lang-toggle="en">EN</button>
+        <button type="button" class="is-active" data-lang-toggle="zh">中文</button>
+      </div>
+      <button type="button" class="atl-iconbtn" data-theme-toggle aria-label="切换明暗主题">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3v2M12 19v2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M3 12h2M19 12h2M5.6 18.4L7 17M17 7l1.4-1.4"/><circle cx="12" cy="12" r="3.6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="atl-app">
+
+    <!-- ============================ 侧栏 ============================ -->
+    <aside class="atl-rail">
+      <div class="atl-brand">
+        <span class="atl-brand__mark">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8"/><path d="M12 3.6c2.6 2.4 2.6 14.4 0 16.8-2.6-2.4-2.6-14.4 0-16.8z"/></svg>
+        </span>
+        <span>
+          <span class="atl-brand__name">Egress</span>
+          <span class="atl-brand__sub">
+            <span class="lang-zh">Claude 出网监控</span>
+            <span class="lang-en">Claude egress watch</span>
+          </span>
+        </span>
+      </div>
+
+      <nav class="atl-navgroup">
+        <span class="atl-navgroup__label">
+          <span class="lang-zh">监控</span><span class="lang-en">Monitor</span>
+        </span>
+        <button type="button" class="atl-nav is-active" data-route="overview" data-route-title="总览" aria-current="page">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="12" width="7.5" height="9" rx="2"/><rect x="3" y="15.5" width="7.5" height="5.5" rx="2"/></svg>
+          <span class="lang-zh">总览</span><span class="lang-en">Overview</span>
+        </button>
+        <button type="button" class="atl-nav" data-route="domains" data-route-title="逐域名出口">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2M12 3.4c2.4 2.4 2.4 14.4 0 17.2-2.4-2.8-2.4-14.8 0-17.2z"/></svg>
+          <span class="lang-zh">逐域名出口</span><span class="lang-en">By domain</span>
+          <span class="atl-nav__badge" data-cem="badge-domains">0</span>
+        </button>
+        <button type="button" class="atl-nav" data-route="connections" data-route-title="实时连接">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 15l6-6"/><rect x="2.6" y="13.4" width="8" height="8" rx="4"/><rect x="13.4" y="2.6" width="8" height="8" rx="4"/></svg>
+          <span class="lang-zh">实时连接</span><span class="lang-en">Live sockets</span>
+          <span class="atl-nav__badge" data-cem="badge-conns">0</span>
+        </button>
+        <button type="button" class="atl-nav" data-route="latency" data-route-title="延迟分解">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V9.5M10 20V4.5M16 20v-8M22 20H2"/></svg>
+          <span class="lang-zh">延迟分解</span><span class="lang-en">Latency</span>
+        </button>
+      </nav>
+
+      <nav class="atl-navgroup">
+        <span class="atl-navgroup__label">
+          <span class="lang-zh">参考</span><span class="lang-en">Reference</span>
+        </span>
+        <button type="button" class="atl-nav" data-route="dns" data-route-title="解析对账">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="18.5" cy="12" r="2.2"/></svg>
+          <span class="lang-zh">解析对账</span><span class="lang-en">DNS truth</span>
+        </button>
+        <button type="button" class="atl-nav" data-route="inventory" data-route-title="出网域名清单">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h8l5 5v13a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>
+          <span class="lang-zh">出网域名清单</span><span class="lang-en">Endpoint inventory</span>
+        </button>
+      </nav>
+
+      <div class="atl-rail__foot">
+        <div class="atl-userchip">
+          <span class="atl-userchip__avatar" data-cem="status-dot">•</span>
+          <span>
+            <span data-cem="status-text">未开始监控</span>
+            <span class="atl-brand__sub" data-cem="status-sub">按上方开关启动</span>
+          </span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ============================ 主区 ============================ -->
+    <main class="atl-main">
+
+      <div class="atl-topbar">
+        <h1 class="atl-topbar__title" data-route-title-slot>总览</h1>
+        <div class="atl-topbar__side">
+          <div class="monitor-switch">
+            <span class="monitor-switch__text">
+              <span class="monitor-switch__label">
+                <span class="lang-zh">实时监控</span><span class="lang-en">Live monitoring</span>
+              </span>
+              <span class="monitor-switch__hint" data-cem="switch-hint">
+                <span class="lang-zh">打开后每 30 秒探测一轮</span>
+                <span class="lang-en">Probes every 30s once on</span>
+              </span>
+            </span>
+            <button type="button" class="atl-switch" data-switch role="switch"
+                    aria-checked="false" aria-label="实时监控开关"
+                    data-cem="monitor-switch"></button>
+          </div>
+          <div class="atl-seg" data-cem="interval-seg">
+            <button type="button" class="atl-seg__btn" data-seg-group="interval" data-interval="10">10s</button>
+            <button type="button" class="atl-seg__btn is-active" data-seg-group="interval" data-interval="30">30s</button>
+            <button type="button" class="atl-seg__btn" data-seg-group="interval" data-interval="300">5m</button>
+          </div>
+          <button type="button" class="atl-btn atl-btn--sm" data-cem="sample-now">
+            <span class="lang-zh">立刻采一轮</span><span class="lang-en">Probe now</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ------------------------ 面板：总览 ------------------------ -->
+      <section class="atl-pane" data-pane="overview">
+
+        <div class="atl-kpirow" data-reveal>
+          <div class="atl-kpi">
+            <span class="atl-orb">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 6.5v5.6l4 2.4"/><circle cx="12" cy="12" r="8.4"/></svg>
+            </span>
+            <span>
+              <span class="atl-kpi__label">
+                <span class="lang-zh">已采样轮数</span><span class="lang-en">Rounds</span>
+              </span>
+              <span class="atl-kpi__value" data-cem="kpi-rounds">0</span>
+            </span>
+          </div>
+          <div class="atl-kpi">
+            <span class="atl-orb">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2M12 3.4c2.4 2.6 2.4 14.6 0 17.2-2.4-2.6-2.4-14.6 0-17.2z"/></svg>
+            </span>
+            <span>
+              <span class="atl-kpi__label">
+                <span class="lang-zh">在测域名</span><span class="lang-en">Domains probed</span>
+              </span>
+              <span class="atl-kpi__value" data-cem="kpi-domains">—</span>
+            </span>
+          </div>
+          <div class="atl-kpi">
+            <span class="atl-orb">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 21s6.5-5.4 6.5-10a6.5 6.5 0 10-13 0c0 4.6 6.5 10 6.5 10z"/><circle cx="12" cy="11" r="2.4"/></svg>
+            </span>
+            <span>
+              <span class="atl-kpi__label">
+                <span class="lang-zh">出口地区数</span><span class="lang-en">Exit regions</span>
+              </span>
+              <span class="atl-kpi__value" data-cem="kpi-regions">—</span>
+            </span>
+          </div>
+          <div class="atl-kpi">
+            <span class="atl-orb">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>
+            </span>
+            <span>
+              <span class="atl-kpi__label">
+                <span class="lang-zh">出口变更</span><span class="lang-en">Exit changes</span>
+              </span>
+              <span class="atl-kpi__value" data-cem="kpi-changes">—</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- 三个入口各自的出口 -->
+        <div class="atl-grid atl-grid--3" data-cem="surface-grid" data-reveal data-reveal-delay="60">
+          <!-- 由 app.js 按 /api/state 填充；未开监控时是下面这个空状态。 -->
+          <div class="atl-card">
+            <div class="empty">
+              <span class="empty__title">
+                <span class="lang-zh">还没有数据</span><span class="lang-en">No data yet</span>
+              </span>
+              <span class="empty__hint">
+                <span class="lang-zh">监控默认是关的 —— 打开右上角开关，或者按「立刻采一轮」。<br>这个工具在你没允许之前，一个探测请求都不会发。</span>
+                <span class="lang-en">Monitoring is off by default. Flip the switch or press “Probe now”.<br>Nothing is probed until you say so.</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="atl-grid atl-grid--main-side">
+
+          <!-- 这一屏唯一的暗卡：需要动作的东西 -->
+          <div class="atl-card atl-card--ink findings" data-reveal>
+            <div class="atl-card__head">
+              <h2 class="atl-card__title">
+                <span class="lang-zh">本轮结论</span><span class="lang-en">What this round found</span>
+              </h2>
+              <span class="atl-chip" style="background:rgba(255,255,255,0.12); color:inherit;" data-cem="notes-count">0</span>
+            </div>
+            <div data-cem="notes-list">
+              <p class="atl-muted" style="margin:0; font-size:13px;">
+                <span class="lang-zh">采过一轮之后，这里会列出需要你处理的事：某个入口落在受限地区、两个入口出口不一致、某个域名没被分流规则覆盖到。</span>
+                <span class="lang-en">After a round, this card lists what needs action: an entry point landing in a restricted region, two entry points exiting different countries, a domain your routing rules never matched.</span>
+              </p>
+            </div>
+            <p class="atl-muted findings__foot" style="margin:0; font-size:12px;">
+              <span class="lang-zh">为什么这张卡是暗的：一屏里只留一个视线落点，而它应该落在「要动手的事」上，不是落在汇总数字上。<br>结论是算出来的，不是复述数字：出口国家在入口之间不一致、某条路径下的域名没被规则覆盖、连接的真实目的地拿不到 —— 这三类都会在这里出现。</span>
+              <span class="lang-en">One dark card per screen, and it belongs on the thing you must act on — not on a summary you can already see.<br>These lines are computed, not restated: exits disagreeing across entry points, domains a routing rule never matched, destinations we cannot see. </span>
+            </p>
+          </div>
+
+          <!-- 遥测目的地 -->
+          <div class="atl-card" data-reveal data-reveal-delay="60">
+            <div class="atl-card__head">
+              <div>
+                <h2 class="atl-card__title">
+                  <span class="lang-zh">遥测发往哪里</span><span class="lang-en">Where telemetry goes</span>
+                </h2>
+                <p class="atl-muted" style="margin:4px 0 0; font-size:13px;">
+                  <span class="lang-zh">只做 TLS 握手量延迟，不发任何数据 —— 往别人的遥测 intake 写东西是污染它的数据。</span>
+                  <span class="lang-en">TLS handshake only, no payload — writing into someone's telemetry intake pollutes their data.</span>
+                </p>
+              </div>
+            </div>
+            <div data-cem="telemetry-list">
+              <p class="atl-muted" style="margin:0; font-size:13px;">
+                <span class="lang-zh">Claude Code 里硬编码了 Datadog <strong>US5</strong> 站点的日志 intake，桌面端和网页端另外带一套浏览器端 SDK，错误上报走 Sentry 的 US 区。采一轮就能看到各自的延迟。</span>
+                <span class="lang-en">Claude Code hardcodes the Datadog <strong>US5</strong> logs intake; desktop and web add a browser SDK, and crash reports go to Sentry's US region. Run a round to see each one's latency.</span>
+              </p>
+            </div>
+            <p class="atl-muted" style="margin:var(--space-5) 0 0; font-size:12.5px;">
+              <span class="lang-zh">US5 是 Datadog 的一个站点代号，落地在美国的 Google Cloud 上（实测解析到 GCP 的地址段）。关闭办法见 docs/02-telemetry.md。</span>
+              <span class="lang-en">US5 is a Datadog site code; it resolves into Google Cloud address space in the US. How to turn it off: docs/02-telemetry.md.</span>
+            </p>
+          </div>
+        </div>
+
+        <div class="atl-grid atl-grid--2">
+          <!-- 出口变更时间轴 -->
+          <div class="atl-card" data-reveal>
+            <div class="atl-card__head">
+              <h2 class="atl-card__title">
+                <span class="lang-zh">出口变更</span><span class="lang-en">Exit changes</span>
+              </h2>
+              <span class="atl-muted" style="font-size:12.5px;">
+                <span class="lang-zh">只在变了的时候记一条</span><span class="lang-en">Logged only on change</span>
+              </span>
+            </div>
+            <div class="atl-timeline" data-cem="changes-list">
+              <p class="atl-muted" style="margin:0; font-size:13px;">
+                <span class="lang-zh">出口 IP 或地区变化时才在这里留一行。每轮都记等于把一屏日志变成噪声，而你关心的只有「什么时候变的」。</span>
+                <span class="lang-en">A line appears only when the exit IP or region changes. Logging every round would be noise; the question is always “when did it change”.</span>
+              </p>
+            </div>
+          </div>
+
+          <!-- 当前路径 -->
+          <div class="atl-card" data-reveal data-reveal-delay="60">
+            <div class="atl-card__head">
+              <h2 class="atl-card__title">
+                <span class="lang-zh">本机的路径</span><span class="lang-en">Paths on this machine</span>
+              </h2>
+            </div>
+            <div data-cem="paths-list">
+              <p class="atl-muted" style="margin:0; font-size:13px;">
+                <span class="lang-zh">CLI 只认 <code class="atl-mono">HTTPS_PROXY</code> 环境变量，桌面端和浏览器认 macOS 系统代理。两份配置不同，出口就可以不同 —— 这是这个工具存在的理由。</span>
+                <span class="lang-en">The CLI reads only <code class="atl-mono">HTTPS_PROXY</code>; desktop and browsers read the macOS system proxy. Two different configs mean two different exits — which is why this tool exists.</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ 面板：逐域名 ------------------------ -->
+      <section class="atl-pane" data-pane="domains" hidden>
+        <div class="atl-card atl-card--flush" data-reveal>
+          <div class="atl-card__head" style="padding:var(--space-5) var(--space-5) 0; margin-bottom:var(--space-3);">
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">每个域名 × 每条路径</span><span class="lang-en">Every domain × every path</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:13px;">
+                <span class="lang-zh">出口 IP 是目的地那侧看到的源地址，不是本机接口地址。点表头排序。</span>
+                <span class="lang-en">The exit IP is what the destination sees, not a local interface address. Click a header to sort.</span>
+              </p>
+            </div>
+          </div>
+          <div class="atl-scroll">
+            <table class="atl-table">
+              <thead>
+                <tr>
+                  <th><button type="button" class="atl-table__sort" data-sort="host">
+                    <span class="lang-zh">域名</span><span class="lang-en">Domain</span></button></th>
+                  <th><button type="button" class="atl-table__sort" data-sort="path">
+                    <span class="lang-zh">入口</span><span class="lang-en">Entry</span></button></th>
+                  <th><span class="lang-zh">出口 IP</span><span class="lang-en">Exit IP</span></th>
+                  <th><button type="button" class="atl-table__sort" data-sort="region">
+                    <span class="lang-zh">地区</span><span class="lang-en">Region</span></button></th>
+                  <th><span class="lang-zh">边缘机房</span><span class="lang-en">Colo</span></th>
+                  <th style="width:150px;"><button type="button" class="atl-table__sort" data-sort="total">
+                    <span class="lang-zh">总耗时</span><span class="lang-en">Total</span></button></th>
+                </tr>
+              </thead>
+              <tbody data-cem="domains-body">
+                <tr><td colspan="6" class="atl-muted" style="padding:var(--space-6); text-align:center;">
+                  <span class="lang-zh">采一轮才有内容</span><span class="lang-en">Run a round first</span>
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ 面板：实时连接 ------------------------ -->
+      <section class="atl-pane" data-pane="connections" hidden>
+        <div class="atl-card" data-reveal>
+          <div class="atl-card__head">
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">Claude 的进程此刻连着谁</span><span class="lang-en">What Claude is connected to right now</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:13px; max-width:70ch;">
+                <span class="lang-zh">用 <code class="atl-mono">lsof</code> 读进程的 socket，不抓包、不看内容、不需要 root。三条限制写在下面，因为它们决定了哪几行你不能当成结论。</span>
+                <span class="lang-en">Reads process sockets with <code class="atl-mono">lsof</code> — no capture, no payload, no root. The three limits below decide which rows you may not read as conclusions.</span>
+              </p>
+            </div>
+          </div>
+          <div class="atl-scroll">
+            <table class="atl-table">
+              <thead>
+                <tr>
+                  <th><span class="lang-zh">入口</span><span class="lang-en">Entry</span></th>
+                  <th><span class="lang-zh">目的地</span><span class="lang-en">Destination</span></th>
+                  <th><span class="lang-zh">性质</span><span class="lang-en">Kind</span></th>
+                  <th><span class="lang-zh">归属</span><span class="lang-en">Owner</span></th>
+                  <th style="width:96px;"><span class="lang-zh">连接数</span><span class="lang-en">Sockets</span></th>
+                </tr>
+              </thead>
+              <tbody data-cem="conns-body">
+                <tr><td colspan="5" class="atl-muted" style="padding:var(--space-6); text-align:center;">
+                  <span class="lang-zh">采一轮才有内容</span><span class="lang-en">Run a round first</span>
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="margin-top:var(--space-5);">
+            <div class="atl-accordion">
+              <button type="button" class="atl-accordion__head" data-accordion>
+                <span class="lang-zh">这张表看不到什么（三条限制）</span>
+                <span class="lang-en">What this table cannot see (three limits)</span>
+                <span class="atl-accordion__sign"></span>
+              </button>
+              <div class="atl-accordion__body">
+                <p class="atl-muted" style="font-size:13px; line-height:1.68;">
+                  <span class="lang-zh">
+                    <strong>一、走本机代理的连接，目的地是不可见的。</strong>
+                    桌面端和浏览器把流量交给系统代理，<code class="atl-mono">lsof</code> 只能看到「它连了 127.0.0.1」。
+                    真实目的地在代理进程里，要补上这一段得打开分流器的控制接口。<br><br>
+                    <strong>二、fake-ip 地址不是真实主机。</strong>
+                    开了 TUN 的机器上，<code class="atl-mono">198.18.x.x</code> 是分流器发给每个域名的占位地址。
+                    好处是每个域名一个独立占位地址，反而能反查出域名；坏处是查这个 IP 的归属毫无意义。<br><br>
+                    <strong>三、浏览器里无法归属到 Claude 的连接不列出。</strong>
+                    浏览器同时连着几十个别的站点。列出来既是噪声，也等于把你在访问哪些网站写进采样文件 —— 这个工具没有理由知道那些。
+                  </span>
+                  <span class="lang-en">
+                    <strong>1. Destinations behind a local proxy are invisible.</strong>
+                    Desktop and browsers hand traffic to the system proxy, so <code class="atl-mono">lsof</code> only sees a connection to 127.0.0.1.
+                    Recovering the real destination requires the router's own control API.<br><br>
+                    <strong>2. fake-ip addresses are not real hosts.</strong>
+                    With TUN on, <code class="atl-mono">198.18.x.x</code> is a placeholder the router assigns per domain. The upside: one placeholder per
+                    domain means we can map it back to a name. The downside: looking up that IP's owner is meaningless.<br><br>
+                    <strong>3. Browser sockets we cannot attribute to Claude are not listed.</strong>
+                    A browser is connected to dozens of other sites. Listing them is noise — and it would write your browsing into the sample file.
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ 面板：延迟 ------------------------ -->
+      <section class="atl-pane" data-pane="latency" hidden>
+        <div class="atl-grid atl-grid--main-side">
+          <div class="atl-card" data-reveal>
+            <div class="atl-card__head">
+              <div>
+                <h2 class="atl-card__title">
+                  <span class="lang-zh">模型 API 的往返耗时</span><span class="lang-en">Round-trip to the model API</span>
+                </h2>
+                <p class="atl-muted" style="margin:4px 0 0; font-size:13px;">
+                  <span class="lang-zh">柱高是 p50，轨道是 1500 ms 的量纲。没有轨道，一根矮柱只读作「矮」。</span>
+                  <span class="lang-en">Bar height is p50 against a 1500 ms track. Without the track a short bar only reads as “short”.</span>
+                </p>
+              </div>
+              <div class="atl-legend">
+                <span><span class="atl-legend__dot"></span><span class="lang-zh">p50</span><span class="lang-en">p50</span></span>
+                <span><span class="atl-legend__dot atl-legend__dot--muted"></span>1500 ms</span>
+              </div>
+            </div>
+            <div class="chart-body">
+              <div class="atl-axis" aria-hidden="true">
+                <span>1500</span><span>1125</span><span>750</span><span>375</span><span>0</span>
+              </div>
+              <div class="atl-bars" data-cem="latency-bars" role="img"
+                   aria-label="各域名各路径的 p50 往返耗时">
+              </div>
+            </div>
+            <p class="atl-muted" style="margin:var(--space-4) 0 0; font-size:12.5px;">
+              <span class="lang-zh">刻度里 <strong>·C</strong> 是 Claude Code，<strong>·D</strong> 是桌面端 / 浏览器；鼠标停在柱子上看完整域名和 p50。<br>同一个域名两条路径差得远，说明差异来自代理链路而不是这个域名本身。都慢才是 Claude 那侧或你的宽带的问题。</span>
+              <span class="lang-en">In the ticks, <strong>·C</strong> is Claude Code and <strong>·D</strong> is desktop/browser; hover a bar for the full domain and p50.<br>A wide gap between two paths for the same domain means the difference is the proxy chain, not the domain. Both slow points at Claude's side or your uplink.</span>
+            </p>
+          </div>
+
+          <div class="atl-card" data-reveal data-reveal-delay="60">
+            <div class="atl-card__head">
+              <h2 class="atl-card__title">
+                <span class="lang-zh">一次请求的四段</span><span class="lang-en">Four phases of one request</span>
+              </h2>
+            </div>
+            <div data-cem="phase-list">
+              <p class="atl-muted" style="margin:0; font-size:13px; line-height:1.68;">
+                <span class="lang-zh">总耗时慢有四种完全不同的原因，修法也完全不同：<strong>DNS</strong> 慢换解析器，<strong>TCP</strong> 慢换出口节点，<strong>TLS</strong> 慢多半是链路丢包重传，<strong>首字节</strong> 慢是服务端或中间代理在等。所以这里从来不给一个总数了事。</span>
+                <span class="lang-en">Four different causes hide behind one “slow”, each with a different fix: <strong>DNS</strong> → change resolver; <strong>TCP</strong> → change exit node; <strong>TLS</strong> → usually loss and retransmit; <strong>first byte</strong> → the server or an intermediate proxy is waiting. A single total never tells you which.</span>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="atl-card atl-card--flush" data-reveal>
+          <div class="atl-card__head" style="padding:var(--space-5) var(--space-5) 0; margin-bottom:var(--space-3);">
+            <h2 class="atl-card__title">
+              <span class="lang-zh">分位数（按当前窗口）</span><span class="lang-en">Percentiles over the current window</span>
+            </h2>
+          </div>
+          <div class="atl-scroll">
+            <table class="atl-table">
+              <thead>
+                <tr>
+                  <th><span class="lang-zh">域名</span><span class="lang-en">Domain</span></th>
+                  <th><span class="lang-zh">入口</span><span class="lang-en">Entry</span></th>
+                  <th class="atl-table__num">n</th>
+                  <th class="atl-table__num">p50</th>
+                  <th class="atl-table__num">p95</th>
+                  <th class="atl-table__num">
+                    <span class="lang-zh">最快</span><span class="lang-en">min</span>
+                  </th>
+                  <th class="atl-table__num">
+                    <span class="lang-zh">最慢</span><span class="lang-en">max</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody data-cem="latency-body">
+                <tr><td colspan="7" class="atl-muted" style="padding:var(--space-6); text-align:center;">
+                  <span class="lang-zh">至少采两轮才有分位数</span><span class="lang-en">Needs at least two rounds</span>
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ 面板：解析对账 ------------------------ -->
+      <section class="atl-pane" data-pane="dns" hidden>
+        <div class="atl-card" data-reveal>
+          <div class="atl-card__head">
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">本机解析 vs 公网权威</span><span class="lang-en">Local resolution vs public authority</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:13px; max-width:74ch;">
+                <span class="lang-zh">左边是进程真正会连的地址，右边是这个域名真实指向哪（走 DoH 拿，报文加密，中间的分流器改不了里面的答案）。两者不一致就是本机 DNS 被改写了 —— 「我以为流量走 A、其实走 B」几乎都从这里开始。</span>
+                <span class="lang-en">Left is the address processes will actually dial. Right is where the name really points, fetched over DoH — the payload is encrypted, so a local router cannot rewrite the answer. A mismatch means local DNS was rewritten, which is where almost every “I thought it went via A” begins.</span>
+              </p>
+            </div>
+          </div>
+          <div class="atl-scroll">
+            <table class="atl-table">
+              <thead>
+                <tr>
+                  <th><span class="lang-zh">域名</span><span class="lang-en">Domain</span></th>
+                  <th><span class="lang-zh">本机</span><span class="lang-en">Local</span></th>
+                  <th><span class="lang-zh">权威</span><span class="lang-en">Authority</span></th>
+                  <th><span class="lang-zh">专用解析器</span><span class="lang-en">Resolver</span></th>
+                  <th><span class="lang-zh">判定</span><span class="lang-en">Verdict</span></th>
+                </tr>
+              </thead>
+              <tbody data-cem="dns-body">
+                <tr><td colspan="5" class="atl-muted" style="padding:var(--space-6); text-align:center;">
+                  <span class="lang-zh">采一轮才有内容</span><span class="lang-en">Run a round first</span>
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ 面板：域名清单 ------------------------ -->
+      <section class="atl-pane" data-pane="inventory" hidden>
+        <div class="atl-card" data-reveal>
+          <div class="atl-card__head">
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">Claude 会连哪些域名</span><span class="lang-en">Domains Claude reaches</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:13px; max-width:74ch;">
+                <span class="lang-zh">每一行都有取证来源：从 Claude Code 的单文件可执行和桌面端 <code class="atl-mono">app.asar</code> 里抽出的字符串，加上本机 <code class="atl-mono">lsof</code> 真实抓到过的连接。复现命令写在 <code class="atl-mono">docs/01-endpoints.md</code>，可以自己跑一遍对账。</span>
+                <span class="lang-en">Every row carries its evidence: strings pulled from the Claude Code single-file executable and the desktop <code class="atl-mono">app.asar</code>, plus connections actually observed via <code class="atl-mono">lsof</code>. Reproduction commands are in <code class="atl-mono">docs/01-endpoints.md</code>.</span>
+              </p>
+            </div>
+            <span class="atl-chip atl-chip--accent" data-cem="inv-version">CLI —</span>
+          </div>
+          <div data-cem="inventory-list" style="margin-top:var(--space-5);"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer class="atl-foot">
+    <span>
+      <span class="lang-zh">全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址</span>
+      <span class="lang-en">All probing is local · samples are never uploaded · the UI binds loopback only</span>
+    </span>
+    <span class="atl-mono" data-cem="foot-ts">—</span>
+  </footer>
+</div>
+
+<script src="assets/atelier.js"></script>
+<script src="app.js"></script>
+
+<!-- design-review:self-diff v1
+Skill: atelier
+Page-type: dashboard
+Created: 2026-08-14
+
+Decisions (7):
+1. [switch-is-the-product] chose "monitoring defaults to OFF, with the switch in the top bar and an empty state that says so" over "start sampling as soon as the page loads". Because: a tool whose whole job is watching network traffic loses its credibility the moment it sends requests nobody asked for. The empty state is therefore a feature, not a placeholder — it is the page telling the truth about what it has done so far (nothing).
+2. [three-cards-not-one-number] chose "one card per entry point (CLI / desktop / web) each carrying its own exit IP, region and colo" over "a single 'your exit IP' headline". Because: on any machine with a proxy the three entry points read different config files and therefore can exit in different countries; a single headline would have to pick one and would be wrong for the other two.
+3. [ink-card-holds-the-findings] chose "the one dark card holds the computed findings (mismatched exits, restricted regions, uncovered domains)" over "the dark card holds a summary KPI". Because: on a light page the dark card is the first place the eye lands, and that budget should be spent on what the reader must act on rather than on a number already visible in the KPI row.
+4. [handshake-only-telemetry] chose "TLS handshake against telemetry intakes, never an HTTP request" over "a real request to measure end-to-end latency". Because: writing into someone else's telemetry intake pollutes their data and turns this monitor into a reporting source — the handshake already answers reachability and latency.
+5. [limits-shipped-with-the-table] chose "an accordion next to the live-socket table listing the three things it cannot see" over "a footnote or a docs link". Because: two of the three limits (proxied destinations invisible, fake-ip is not a real host) will otherwise be read as conclusions, and a wrong conclusion about where traffic exits is exactly the failure this tool exists to prevent.
+6. [phases-not-a-total] chose "DNS / TCP / TLS / first-byte broken out" over "one latency number". Because: the four causes have four different fixes, and a single total cannot tell you which one you have.
+7. [browser-sockets-filtered] chose "drop browser sockets that cannot be attributed to Claude, and say how many were dropped" over "list every socket the browser has open". Because: the unattributable rows are both noise and a record of what else the user is browsing — the tool has no reason to hold that, and silently dropping without a count would misrepresent coverage.
+
+Known trade-offs:
+- The interval segmented control is NOT decorative here (canonical atelier treats segments as decoration): this is a real product, so changing it POSTs to /api/monitor. Numbers on screen still come only from measurements — app.js renders what the sampler returns and never computes a figure of its own.
+- Live values arrive over SSE, so static markup is the empty state rather than the terminal state. The freeze contract still holds for what ships in the page: with JS off, the page reads as "monitoring is off, here is what each card will show".
+- Fonts load from Google Fonts. On a page whose subject is outbound traffic that is worth naming: it is one request to a third party, and the page renders correctly on the fallback stack if it is blocked.
+- The exit region shown per entry point is measured on one core domain (the first API-class domain that answered). Per-domain differences live in the "by domain" pane rather than being averaged into the card.
+/design-review:self-diff -->
+
+</body>
+</html>

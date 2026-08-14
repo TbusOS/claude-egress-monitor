@@ -1,0 +1,1316 @@
+/* === Atelier Design System — Core CSS ===
+ * Last verified: 2026-08-14
+ * Docs: ../references/design-tokens.md · ../references/atelier-material.md
+ *
+ * Identity: a warm gradient wallpaper with a single frosted application
+ * window floating on it. This skill draws PRODUCT UI — sidebars, KPI rows,
+ * filter panels, record tables, booking flows — not marketing pages. Its
+ * three signature moves:
+ *   1. the wallpaper is a mesh of peach / rose / cream, never a flat fill;
+ *   2. the whole app chrome is ONE sheet of glass, with opaque cards inside
+ *      it for data (glass is chrome, opacity is data — see atelier-material §3);
+ *   3. category icons are gradient orbs (coral → rose), the one place the
+ *      two accents are allowed to touch.
+ *
+ * Dual theme: html[data-theme="light"] is canonical (the aesthetic is a
+ * daylight one); "dark" is the warm-night variant — still warm, never navy.
+ * Components reference semantic tokens only — zero hardcoded hex in pages.
+ */
+
+/* ---------- Section A: Tokens ---------- */
+:root {
+  /* Theme-independent scale */
+  --font-display: "Plus Jakarta Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Plus Jakarta Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --space-1: 4px;  --space-2: 8px;   --space-3: 12px;  --space-4: 16px;
+  --space-5: 20px; --space-6: 28px;  --space-7: 40px;  --space-8: 56px;
+  --space-9: 80px; --space-10: 112px;
+
+  /* Radius ladder. An app window is rounder than a document: the shell is
+   * 28px, cards 20px, controls 12px, chips fully round. */
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 20px;
+  --radius-lg: 28px;
+  --radius-pill: 9999px;
+
+  --ease-atl: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.64, 1);
+  --duration-xs: 140ms;
+  --duration-sm: 240ms;
+  --duration-md: 520ms;
+  --duration-lg: 900ms;
+
+  /* Brand constants — identical in both themes. The rose is the identity
+   * color (brand-presence gate matches it); the coral is its warm partner
+   * and only ever appears alongside it, most often inside a gradient. */
+  --atl-rose: #DD4F92;
+  --atl-coral: #F5854F;
+  --atl-amber: #F6B24C;
+  --atl-grad: linear-gradient(158deg, var(--atl-coral) 0%, var(--atl-rose) 100%);
+  --atl-grad-soft: linear-gradient(158deg, rgba(245, 133, 79, 0.16) 0%, rgba(221, 79, 146, 0.16) 100%);
+}
+
+/* Light theme — CANONICAL */
+:root,
+html[data-theme="light"] {
+  color-scheme: light;
+
+  /* Wallpaper: warm stops behind everything. Never a flat color — the glass
+   * has nothing to refract over a flat fill.
+   *
+   * RECALIBRATED 2026-08-14 against the reference boards, by sampling them:
+   * the reference wallpaper runs S27-40% with a V54→V93 value SPREAD, and the
+   * colour seen THROUGH its glass is #E3C7B1 — still visibly peach. The first
+   * cut of these tokens sat at S≤19 / V96+ with a 1-point spread, so the shell
+   * had nothing to frost and read as matte cream paper. Frosted glass needs
+   * something to frost: glassiness = wallpaper saturation × value spread ×
+   * shell transparency, and all three were weak. */
+  --atl-wall-1: #E8AE86;          /* deep peach, top-left  · S42 V91 */
+  --atl-wall-2: #E39BA8;          /* rose, right           · S31 V89 */
+  --atl-wall-3: #FAEEDD;          /* cream highlight, bottom-centre — keeps the spread */
+  --atl-wall-4: #C98F72;          /* terracotta, low corner · V79 — the dark end */
+  --atl-wall-base: #E9C3A8;
+
+  /* The ink ramp is SOLID, not alpha. Alpha muted text is the single most
+   * common AA failure in this aesthetic: rgba(44,39,35,0.46) composites to
+   * #9d9996 on a card and measures 2.74:1 — axe-core flagged 21 elements on
+   * the dashboard canonical alone, and our own contrast check never saw it
+   * because it never composited the layer. Solid values are measurable at
+   * author time; every one below clears 4.5:1 on the HARDEST ground it can
+   * land on (the wallpaper for page-level text, a 12% tint chip for chips). */
+  --atl-ink: #2C2723;             /* warm charcoal — never pure black · 14.3:1 */
+  /* DEEPENED one notch for material v3 (2026-08-14). Dropping the shell veil
+   * to 0.32 darkened the ground under the little text that sits on the shell
+   * rather than on a card: sampled worst case went 4.86 → 4.38, i.e. under AA.
+   * The fix is the ink, never the alpha — that is the whole point of the solid
+   * ramp. #564D47 puts the worst ground back at 4.81 and lifts the card case
+   * from 7.4 to 8.1. */
+  --atl-ink-2: #564D47;           /* 8.1:1 on card · 5.0:1 on wallpaper base · 4.8:1 worst shell pixel */
+  --atl-ink-3: #70665F;           /* 5.4:1 on card — CARD ONLY, see dos-and-donts §11.4 */
+  --atl-ink-inv: #FDF8F4;
+
+  /* The app shell: one sheet of glass.
+   *
+   * MATERIAL v3, 2026-08-14. The v2 pane read as milk, and sampling the render
+   * said why: at 0.42 of a nearly-pure white veil over a saturate(180%)
+   * backdrop the RED CHANNEL CLIPPED to 255 across every glass region
+   * (measured: 100% of pixels in the rail and the right-hand gutters). A
+   * clipped channel cannot carry a gradient, so the value spread THROUGH the
+   * glass collapsed to 1.6 points — the pane showed one flat cream, which is
+   * exactly what "not transparent enough" looks like. Three changes together:
+   * the veil drops to 0.32 and warms (255,250,244 instead of 255,253,251),
+   * and the backdrop saturate comes DOWN to 1.45 so nothing blows out.
+   * Measured after: zero clipped pixels, mean glass saturation 24.4% → 26.1%,
+   * value spread 1.6 → 4.8 points. Lower saturate but MORE visible colour —
+   * headroom beats gain. */
+  --atl-shell-bg: rgba(255, 250, 244, 0.32);
+  --atl-shell-border: rgba(255, 252, 248, 0.55);
+  /* The optical edge of a glass pane is not one flat white line: it is bright
+   * where the light enters (top-left) and warm-dark where the pane's own
+   * thickness shows (bottom-right). Applied as a 1px masked gradient ring in
+   * Section E; --atl-shell-border is the fallback for engines without
+   * mask-composite. */
+  --atl-shell-edge: linear-gradient(146deg,
+      rgba(255, 255, 255, 0.55) 0%,
+      rgba(255, 255, 255, 0.20) 38%,
+      rgba(120, 80, 60, 0.06) 64%,
+      rgba(120, 80, 60, 0.12) 100%);
+  --atl-shell-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  /* Two shadows, because glass has thickness: a tight contact shadow that
+   * seats the pane on the wallpaper, and a wide ambient one that lifts it. */
+  --atl-shell-contact: 0 2px 6px -2px rgba(96, 52, 40, 0.20);
+  --atl-shell-shadow: 0 40px 80px -28px rgba(96, 52, 40, 0.42);
+
+  /* Rail (sidebar). This alpha is ADDITIVE, not a replacement: the rail is a
+   * child of the shell, so its veil paints over the shell's and the composite
+   * is 0.32 + 0.20 × 0.68 = 0.456. The rail is therefore the HAZIEST glass on
+   * the page, not the clearest — the old comment here claimed the opposite,
+   * which was simply wrong about the layer stack. Hazy is right anyway:
+   * navigation is furniture and should recede. */
+  --atl-rail-bg: rgba(255, 249, 242, 0.20);
+  --atl-rail-active-bg: rgba(255, 255, 255, 0.92);
+  --atl-rail-active-shadow: 0 6px 16px -6px rgba(96, 52, 40, 0.28);
+
+  /* Cards: DATA surfaces, deliberately more opaque than the chrome */
+  --atl-card-bg: rgba(255, 254, 252, 0.80);
+  --atl-card-border: rgba(255, 255, 255, 0.80);
+  --atl-card-shadow: 0 10px 26px -14px rgba(96, 52, 40, 0.26);
+  --atl-card-2-bg: rgba(255, 255, 255, 0.94);
+
+  /* The one dark card per screen — the visual anchor */
+  --atl-ink-card-bg: #211C1A;
+  --atl-ink-card-ink: #F7EFE9;
+  --atl-ink-card-ink-2: rgba(247, 239, 233, 0.62);
+
+  --atl-line: rgba(88, 62, 50, 0.10);
+  --atl-line-strong: rgba(88, 62, 50, 0.18);
+  --atl-track: rgba(88, 62, 50, 0.11);   /* bar-chart + meter tracks */
+  --atl-field-bg: rgba(255, 255, 255, 0.72);
+  --atl-field-border: rgba(88, 62, 50, 0.16);
+
+  /* Rose as TEXT. #DD4F92 on white is 3.4:1; #C13877 clears on a card (4.97)
+   * but only reaches 4.29 on its OWN 12% chip, which is where it is used most.
+   * #B83370 clears both (5.44 card / 4.70 chip) and still takes white at 5.61. */
+  --atl-accent-ink: #B83370;
+  /* Text sitting DIRECTLY on the (recalibrated, saturated) wallpaper — the
+   * page-head kicker — needs a deeper rose: #B83370 reads 3.43 there. axe
+   * cannot police this ground (gradient backgrounds come back "incomplete",
+   * not "violation" — the footer only got flagged because the page bottom is
+   * flat base colour), so this is a manual red line, not a gate-enforced one. */
+  --atl-accent-ink-deep: #8E2756; /* 4.98 on the wallpaper base */
+  --atl-accent-soft: rgba(221, 79, 146, 0.12);
+
+  /* Verdict colours are TEXT on a 12% tint of themselves — the hardest ground
+   * they see. Each value below is chosen to clear 4.5:1 on that chip, not just
+   * on the card: the previous #1F8A5B measured 3.61 on its own chip. */
+  --atl-up: #127046;              /* 5.94 card · 4.99 chip */
+  --atl-down: #B5342E;            /* 5.83 card · 4.85 chip */
+  --atl-warn: #8E5A0F;            /* 5.63 card · 4.78 chip */
+  --atl-code-bg: rgba(88, 62, 50, 0.07);
+  --atl-blur: 42px;
+  /* Backdrop saturation. Pure blur AVERAGES the wallpaper toward grey-white,
+   * so some saturate is mandatory or the frost turns to milk. But it is a gain
+   * stage: push it past ~1.5 over this wallpaper and the peach clips (see
+   * --atl-shell-bg). 1.45 is the last stop with headroom. */
+  --atl-glass-sat: 1.45;
+  /* The "sand" in sandblasted: a 3%-alpha fractal-noise tile laid over the
+   * glass surfaces only (never over a data card). It breaks the mathematically
+   * smooth blur, which is what separates frosted glass from tinted plastic. */
+  --atl-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.028'/%3E%3C/svg%3E");
+}
+
+/* Dark theme — the warm-night variant. Espresso, not navy: the wallpaper
+ * keeps its coral/rose stops, only the value inverts. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --atl-wall-1: #4A2A20;
+  --atl-wall-2: #57293A;
+  --atl-wall-3: #2A1B17;
+  --atl-wall-4: #6B3A2A;          /* ember glow, low corner — the BRIGHT end in dark */
+  --atl-wall-base: #2A1D18;
+
+  --atl-ink: #F8EFE9;
+  --atl-ink-2: #CFC1B8;           /* 6.4:1 on card · 8.0:1 on shell */
+  --atl-ink-3: #BCACA3;           /* 5.1:1 on card · 6.4:1 on shell */
+  --atl-ink-inv: #241A17;
+
+  --atl-shell-bg: rgba(40, 27, 24, 0.30);
+  --atl-shell-border: rgba(255, 224, 208, 0.16);
+  --atl-shell-edge: linear-gradient(146deg,
+      rgba(255, 236, 224, 0.34) 0%,
+      rgba(255, 236, 224, 0.09) 44%,
+      rgba(0, 0, 0, 0.06) 70%,
+      rgba(0, 0, 0, 0.14) 100%);
+  --atl-shell-highlight: inset 0 1px 0 rgba(255, 236, 224, 0.14);
+  --atl-shell-contact: 0 2px 6px -2px rgba(0, 0, 0, 0.52);
+  --atl-shell-shadow: 0 40px 80px -28px rgba(0, 0, 0, 0.66);
+
+  --atl-rail-bg: rgba(34, 22, 20, 0.24);
+  --atl-rail-active-bg: rgba(255, 236, 224, 0.14);
+  --atl-rail-active-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.5);
+
+  --atl-card-bg: rgba(56, 38, 33, 0.62);
+  --atl-card-border: rgba(255, 224, 208, 0.13);
+  --atl-card-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.5);
+  --atl-card-2-bg: rgba(64, 44, 38, 0.78);
+
+  /* In the dark theme the anchor card inverts to CREAM — the move is
+   * "one card breaks the value run", not "one card is black". */
+  --atl-ink-card-bg: #F7EFE9;
+  --atl-ink-card-ink: #241A17;
+  --atl-ink-card-ink-2: rgba(36, 26, 23, 0.64);
+
+  --atl-line: rgba(255, 224, 208, 0.11);
+  --atl-line-strong: rgba(255, 224, 208, 0.20);
+  --atl-track: rgba(255, 224, 208, 0.14);
+  --atl-field-bg: rgba(36, 26, 23, 0.44);
+  --atl-field-border: rgba(255, 224, 208, 0.18);
+
+  --atl-accent-ink: #F58FB6;      /* rose lightens for AA on espresso */
+  --atl-accent-ink-deep: #F7A6C4; /* on the dark wallpaper the DEEP variant is the lighter one */
+  --atl-accent-soft: rgba(221, 79, 146, 0.22);
+
+  --atl-up: #4FD69C;
+  --atl-down: #FF8A80;
+  --atl-warn: #F3C063;
+  --atl-code-bg: rgba(0, 0, 0, 0.28);
+  --atl-blur: 36px;
+  /* Lower than light: on an espresso wallpaper the same gain turns the ember
+   * corner into neon. */
+  --atl-glass-sat: 1.22;
+}
+
+/* ---------- Section B: Base ---------- */
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--atl-ink);
+  background-color: var(--atl-wall-base);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.021em;
+  line-height: 1.15;
+  margin: 0;
+  color: var(--atl-ink);
+}
+
+p { margin: 0 0 var(--space-4); }
+a { color: var(--atl-accent-ink); }
+
+/* Inline code is CONTENT, so it takes its own ink rather than inheriting the
+ * muted colour it happens to sit inside. A <code> in a caption inheriting
+ * --atl-ink-3 sits on the code tint, which darkens the ground just enough to
+ * land at 4.48:1 — axe caught exactly that, twice, on the demo page. */
+code, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--atl-ink-2);
+  background: var(--atl-code-bg);
+  padding: 0.12em 0.4em;
+  border-radius: var(--radius-xs);
+}
+.atl-card--ink code, .atl-card--ink kbd, .atl-card--ink samp,
+.atl-inksurface code, .atl-inksurface kbd, .atl-inksurface samp {
+  color: var(--atl-ink-card-ink);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+:focus-visible {
+  outline: 2px solid var(--atl-rose);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ---------- Section C: Wallpaper ---------- */
+/* Three radial stops + a base wash. Fixed attachment so the wallpaper does
+ * not scroll with the shell — the window floats, the paper stays put. */
+.atl-wall {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  /* Four stops. The terracotta (wall-4) is the DARK end of the value spread
+   * and lives at the lower-right edge, mostly outside the shell's footprint —
+   * it gives the frost something dark to diffuse without parking a dark
+   * ground under body text. */
+  background:
+    radial-gradient(58% 52% at 6% 2%, var(--atl-wall-1) 0%, transparent 64%),
+    radial-gradient(54% 60% at 98% 22%, var(--atl-wall-2) 0%, transparent 62%),
+    radial-gradient(60% 46% at 46% 104%, var(--atl-wall-3) 0%, transparent 60%),
+    radial-gradient(44% 44% at 106% 96%, var(--atl-wall-4) 0%, transparent 66%),
+    var(--atl-wall-base);
+}
+
+/* The faint diagonal sheen across the wallpaper. One only. */
+.atl-wall::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background: linear-gradient(112deg, transparent 34%, rgba(255, 255, 255, 0.30) 50%, transparent 66%);
+  /* 0.34, not 0.55. The band is white, so it lightens the backdrop before the
+   * shell ever frosts it — dropping it is the right direction. It also does
+   * very little: measured per-pixel at a fixed viewport, 0.55 → 0.34 moves at
+   * most 6/255 on any channel and the glass samples barely move at all. The
+   * milkiness was mostly the clipped red channel, not this. Keep the honest
+   * numbers in atelier-material.md §1 before reaching for it again.
+   * Dark stays 0.16 — not scaled — see the same section. Count unchanged:
+   * one sheen only. */
+  opacity: 0.34;
+  pointer-events: none;
+}
+
+html[data-theme="dark"] .atl-wall::after { opacity: 0.16; }
+
+/* ---------- Section D: Page tiers ---------- */
+.atl-page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-6) var(--space-9);
+}
+.atl-page--wide { max-width: 1440px; }
+.atl-page--narrow { max-width: 920px; }
+
+/* ---------- Section E: The app shell ---------- */
+/* ONE sheet of glass holding the entire application. Everything else nests
+ * inside it. The rail/main split is a grid so the rail can collapse at
+ * narrow widths without the main pane reflowing twice. */
+.atl-app {
+  position: relative;
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--atl-shell-border);
+  /* Noise tile FIRST, veil colour last — the grain rides on the glass and, by
+   * being an ancestor background, can never land on top of a data card. */
+  background: var(--atl-noise), var(--atl-shell-bg);
+  -webkit-backdrop-filter: blur(var(--atl-blur)) saturate(var(--atl-glass-sat));
+  backdrop-filter: blur(var(--atl-blur)) saturate(var(--atl-glass-sat));
+  box-shadow: var(--atl-shell-shadow), var(--atl-shell-contact), var(--atl-shell-highlight);
+  overflow: hidden;
+}
+.atl-app--rail-wide { grid-template-columns: 288px minmax(0, 1fr); }
+.atl-app--full { grid-template-columns: minmax(0, 1fr); }
+
+/* The 1px optical edge (see --atl-shell-edge). A masked ring rather than a
+ * border-image because border-image ignores border-radius, and this shell is
+ * 28px round. Guarded by @supports: without mask-composite the ring would
+ * paint as a filled sheet over the whole app, so unsupported engines keep the
+ * flat --atl-shell-border instead. */
+@supports ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {
+  .atl-app { border-color: transparent; }
+  .atl-app::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--atl-shell-edge);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+}
+
+.atl-rail {
+  padding: var(--space-6) var(--space-4);
+  background: var(--atl-noise), var(--atl-rail-bg);
+  border-right: 1px solid var(--atl-line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.atl-main {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+.atl-main--tight { padding: var(--space-5); gap: var(--space-4); }
+
+/* ---------- Section F: Brand lockup + rail nav ---------- */
+.atl-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-2);
+}
+.atl-brand__mark {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: var(--atl-grad);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 6px 14px -6px rgba(221, 79, 146, 0.7);
+  flex: none;
+}
+.atl-brand__name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+.atl-brand__sub {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  /* ink-2, not ink-3: this sits on the rail frost (0.28 over deep peach),
+   * where ink-3 reads 3.4. ink-3 is a CARD-ONLY colour — see design-tokens. */
+  color: var(--atl-ink-2);
+}
+
+.atl-navgroup { display: flex; flex-direction: column; gap: 2px; }
+.atl-navgroup__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--atl-ink-2);   /* on the rail frost — ink-3 is card-only */
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+/* Active state is a white PILL, not a color block. The rail must not compete
+ * with the data — see dos-and-donts §2. */
+.atl-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--atl-ink-2);
+  text-decoration: none;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--duration-xs) var(--ease-atl),
+              color var(--duration-xs) var(--ease-atl);
+}
+.atl-nav:hover { background: var(--atl-rail-active-bg); color: var(--atl-ink); }
+.atl-nav__icon { width: 18px; height: 18px; flex: none; opacity: 0.72; }
+.atl-nav__badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--atl-accent-soft);
+  color: var(--atl-accent-ink);
+}
+.atl-nav.is-active,
+.atl-nav--active {
+  background: var(--atl-rail-active-bg);
+  color: var(--atl-ink);
+  box-shadow: var(--atl-rail-active-shadow);
+}
+.atl-nav.is-active .atl-nav__icon,
+.atl-nav--active .atl-nav__icon { opacity: 1; color: var(--atl-accent-ink); }
+
+.atl-rail__foot { margin-top: auto; }
+
+/* ---------- Section G: Top bar ---------- */
+.atl-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.atl-topbar__title { font-size: 34px; letter-spacing: -0.028em; }
+.atl-topbar__side { display: flex; align-items: center; gap: var(--space-3); }
+
+.atl-userchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 5px 14px 5px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--atl-card-2-bg);
+  border: 1px solid var(--atl-card-border);
+  box-shadow: var(--atl-card-shadow);
+  font-size: 13px;
+  font-weight: 600;
+}
+.atl-userchip__avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--atl-grad-soft);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--atl-accent-ink);
+}
+
+.atl-iconbtn {
+  width: 38px; height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--atl-card-border);
+  background: var(--atl-card-bg);
+  color: var(--atl-ink-2);
+  cursor: pointer;
+  transition: color var(--duration-xs) var(--ease-atl),
+              transform var(--duration-xs) var(--ease-atl);
+}
+.atl-iconbtn:hover { color: var(--atl-ink); transform: translateY(-1px); }
+
+/* ---------- Section H: Cards ---------- */
+.atl-card {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--atl-card-border);
+  background: var(--atl-card-bg);
+  box-shadow: var(--atl-card-shadow);
+  padding: var(--space-5);
+}
+.atl-card--flush { padding: 0; overflow: hidden; }
+.atl-card--tight { padding: var(--space-4); }
+.atl-card--solid { background: var(--atl-card-2-bg); }
+
+/* The single dark card per screen. Two on one screen and neither anchors. */
+.atl-card--ink {
+  background: var(--atl-ink-card-bg);
+  color: var(--atl-ink-card-ink);
+  border-color: transparent;
+}
+.atl-card--ink h1, .atl-card--ink h2,
+.atl-card--ink h3, .atl-card--ink h4 { color: var(--atl-ink-card-ink); }
+.atl-card--ink .atl-muted { color: var(--atl-ink-card-ink-2); }
+
+/* An ink SURFACE that is not a card — a split panel, a full-bleed band, a
+ * sidebar. It carries the same colour contract as .atl-card--ink.
+ *
+ * Without this class, a hand-rolled dark panel keeps inheriting the LIGHT
+ * theme's --atl-ink-3 for .atl-muted, and the caption at the bottom of it
+ * goes almost invisible. That failure survived the rendered contrast gate on
+ * this skill's own signin canonical — it was caught by looking at the
+ * screenshot. Any dark region that is not .atl-card--ink MUST take this. */
+.atl-inksurface {
+  background: var(--atl-ink-card-bg);
+  color: var(--atl-ink-card-ink);
+}
+.atl-inksurface h1, .atl-inksurface h2,
+.atl-inksurface h3, .atl-inksurface h4 { color: var(--atl-ink-card-ink); }
+.atl-inksurface .atl-muted { color: var(--atl-ink-card-ink-2); }
+.atl-inksurface .atl-avatar {
+  border-color: var(--atl-ink-card-bg);
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--atl-ink-card-ink);
+}
+
+.atl-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+.atl-card__title { font-size: 18px; letter-spacing: -0.02em; }
+
+/* ---------- Section I: Grid helpers ---------- */
+.atl-grid { display: grid; gap: var(--space-4); }
+.atl-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.atl-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.atl-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.atl-grid--main-side { grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr); }
+.atl-grid--side-main { grid-template-columns: minmax(0, 1fr) minmax(0, 2.1fr); }
+
+/* ---------- Section J: KPI row + gradient orb (SIGNATURE) ---------- */
+.atl-kpirow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--atl-card-border);
+  background: var(--atl-card-bg);
+  box-shadow: var(--atl-card-shadow);
+  overflow: hidden;
+}
+.atl-kpi {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-right: 1px solid var(--atl-line);
+}
+.atl-kpi:last-child { border-right: 0; }
+
+/* The gradient orb. This is the skill's most recognizable single object:
+ * a filled circle carrying the coral→rose ramp with a white glyph inside.
+ * Line icons in a hairline circle is the generic-dashboard tell. */
+.atl-orb {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--atl-grad);
+  color: #FFF;
+  box-shadow: 0 8px 18px -8px rgba(221, 79, 146, 0.62);
+}
+.atl-orb--sm { width: 34px; height: 34px; }
+.atl-orb--lg { width: 58px; height: 58px; }
+/* Soft variant: tinted disc + accent glyph. For secondary rows where a
+ * full ramp on every line would turn the screen into confetti. */
+.atl-orb--soft {
+  background: var(--atl-grad-soft);
+  color: var(--atl-accent-ink);
+  box-shadow: none;
+}
+.atl-orb svg { width: 50%; height: 50%; }
+
+/* Label ABOVE value, not beside it. Both must be display:block — a bare
+ * <span> wrapper inherits inline layout and silently runs the label and the
+ * number onto one line ("Total employees 240"), which reads as a sentence
+ * instead of a metric. */
+.atl-kpi__label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--atl-ink-3);
+  letter-spacing: 0.01em;
+}
+.atl-kpi__value {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+/* ---------- Section K: Figures ---------- */
+.atl-figure { font-variant-numeric: tabular-nums; }
+.atl-figure__value {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: 52px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+.atl-figure__value--lg { font-size: 66px; }
+.atl-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.atl-delta--up { color: var(--atl-up); }
+.atl-delta--down { color: var(--atl-down); }
+.atl-delta--flat { color: var(--atl-ink-3); }
+
+/* ---------- Section L: Bar chart (SIGNATURE) ---------- */
+/* Grey track behind, gradient fill in front, fully round caps on BOTH ends.
+ * The track is what makes the chart read as a gauge rather than a column. */
+.atl-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  height: 190px;
+  padding-left: var(--space-2);
+}
+.atl-bars__col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  height: 100%;
+}
+.atl-bars__stack {
+  position: relative;
+  width: 14px;
+  flex: 1;
+  border-radius: var(--radius-pill);
+  background: var(--atl-track);
+}
+.atl-bars__fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: var(--radius-pill);
+  background: var(--atl-grad);
+  transition: height var(--duration-md) var(--ease-atl);
+}
+.atl-bars__fill--muted { background: var(--atl-track); }
+.atl-bars__tick {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--atl-ink-3);
+}
+/* Paired columns (income vs expense) sit inside one stack slot */
+.atl-bars__pair { display: flex; gap: 5px; flex: 1; align-items: flex-end; }
+
+.atl-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--atl-ink-3);
+  padding-bottom: 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.atl-legend {
+  display: flex;
+  gap: var(--space-4);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--atl-ink-2);
+}
+.atl-legend__dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+  background: var(--atl-grad);
+}
+.atl-legend__dot--muted { background: var(--atl-track); }
+
+/* ---------- Section M: Meter (in-row progress) ---------- */
+.atl-meter {
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--atl-track);
+  overflow: hidden;
+  min-width: 72px;
+}
+.atl-meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--atl-grad);
+}
+/* Wide horizontal bar with the value inked at its right edge — the
+ * "Working Format" pattern. */
+.atl-hbar {
+  position: relative;
+  border-radius: var(--radius-sm);
+  background: var(--atl-track);
+  padding: 14px var(--space-4);
+  overflow: hidden;
+  display: flex;
+  justify-content: flex-end;
+}
+/* The fill is a MID-strength ramp, not the 16% tint used for orb backgrounds.
+ * At 16% over the track the bar reads as "empty with a smudge" and the
+ * proportion — the only thing the component exists to show — disappears. */
+.atl-hbar__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, rgba(245, 133, 79, 0.42) 0%, rgba(221, 79, 146, 0.52) 100%);
+}
+.atl-hbar__value {
+  position: relative;
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--atl-accent-ink-deep);  /* the track composites darker over the saturated wallpaper */
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Section N: Ranked list + avatars ---------- */
+/* EVERY block-behaving BEM element here is declared display:block on purpose.
+ * These slots are written as <span> in the canonical markup (a <div> inside a
+ * flex row would need its own wrapper), and width / height / vertical margin
+ * are silently ignored on an inline box. The failure is not a crash — it is
+ * "16:45YIA" glued onto one line and a 9px timeline dot rendered as a 2px
+ * vertical sliver. Deleting a display:block in this file breaks layout with
+ * no error anywhere. */
+.atl-rank { display: flex; flex-direction: column; gap: var(--space-4); }
+.atl-rank__row { display: flex; align-items: center; gap: var(--space-3); }
+.atl-rank__badge {
+  position: relative;
+  flex: none;
+}
+.atl-rank__n {
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  background: var(--atl-ink-card-bg);
+  color: var(--atl-ink-card-ink);
+  font-size: 10px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.atl-rank__name { display: block; font-size: 14px; font-weight: 700; line-height: 1.3; }
+.atl-rank__meta { display: block; font-size: 12px; color: var(--atl-ink-3); }
+
+.atl-avatar {
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  background: var(--atl-grad-soft);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--atl-accent-ink);
+  flex: none;
+  border: 2px solid var(--atl-card-2-bg);
+}
+.atl-avatar--sm { width: 28px; height: 28px; font-size: 10px; }
+.atl-avatars { display: flex; }
+/* Overlap is ~20% of the avatar, not 35%. The reference aesthetic stacks
+ * PHOTOS, where a deep overlap still reads; initials are text, and text that
+ * is one-third covered is unreadable. Scale the bite with the avatar. */
+.atl-avatars .atl-avatar + .atl-avatar { margin-left: -8px; }
+.atl-avatars .atl-avatar--sm + .atl-avatar--sm { margin-left: -6px; }
+/* Inside the ink card the ring must be the ink card's own background —
+ * a white ring there reads as a rendering artefact, not a separator. */
+.atl-card--ink .atl-avatar {
+  border-color: var(--atl-ink-card-bg);
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--atl-ink-card-ink);
+}
+
+/* ---------- Section O: Table ---------- */
+.atl-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.atl-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--atl-ink-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--atl-line);
+  white-space: nowrap;
+}
+.atl-table td {
+  padding: 13px var(--space-4);
+  border-bottom: 1px solid var(--atl-line);
+  vertical-align: middle;
+}
+.atl-table tr:last-child td { border-bottom: 0; }
+.atl-table tbody tr { transition: background var(--duration-xs) var(--ease-atl); }
+.atl-table tbody tr:hover { background: var(--atl-accent-soft); }
+.atl-table__id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--atl-ink-2);
+}
+.atl-table__num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.atl-table__sort {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.atl-table__sort:hover { color: var(--atl-accent-ink); }
+.atl-scroll { overflow-x: auto; }
+
+/* ---------- Section P: Controls ---------- */
+.atl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 11px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+  background: var(--atl-ink-card-bg);
+  color: var(--atl-ink-card-ink);
+  transition: transform var(--duration-xs) var(--ease-atl),
+              box-shadow var(--duration-xs) var(--ease-atl);
+}
+.atl-btn:hover { transform: translateY(-1px); box-shadow: var(--atl-card-shadow); }
+/* THE GRADIENT NEVER CARRIES TEXT. White on the coral stop #F5854F measures
+ * 2.5:1 — it fails AA at every size — and white on the rose stop is 3.8:1,
+ * which passes only as large text. A button is small text by definition, so
+ * the filled accent button uses the SOLID deep rose (5.1:1 on white) and the
+ * ramp stays where it belongs: orbs, bar fills, meters, the brand mark.
+ * The reference aesthetic agrees — its primary CTA is the near-black button,
+ * which is this skill's default .atl-btn. */
+.atl-btn--accent {
+  background: var(--atl-accent-ink);
+  color: #FFF;
+  box-shadow: 0 10px 22px -10px rgba(184, 51, 112, 0.55);
+}
+/* In dark theme --atl-accent-ink lightens for AA on espresso, so the fill
+ * would strand white text. Flip the ink instead of the fill. */
+html[data-theme="dark"] .atl-btn--accent { color: var(--atl-ink-inv); }
+.atl-btn--ghost {
+  background: var(--atl-field-bg);
+  color: var(--atl-ink);
+  border-color: var(--atl-field-border);
+}
+.atl-btn--sm { padding: 7px 14px; font-size: 13px; }
+
+.atl-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--atl-track);
+}
+.atl-seg__btn {
+  border: 0;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--atl-ink-2);
+  padding: 6px 15px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background var(--duration-xs) var(--ease-atl),
+              color var(--duration-xs) var(--ease-atl);
+}
+.atl-seg__btn.is-active {
+  background: var(--atl-card-2-bg);
+  color: var(--atl-ink);
+  box-shadow: var(--atl-rail-active-shadow);
+}
+
+.atl-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--atl-field-border);
+  background: var(--atl-field-bg);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--atl-ink-2);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.atl-tabs {
+  display: flex;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--atl-line);
+}
+.atl-tab {
+  border: 0;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  /* ink-2, not ink-3: a tab strip sits on the SHELL, not on a card, and ink-3
+   * only clears AA on a card (dos-and-donts §11.4). Material v3 made this
+   * measurable — at the thinner veil the inactive tabs fell to 3.99:1. */
+  color: var(--atl-ink-2);
+  padding: 0 0 12px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--duration-xs) var(--ease-atl);
+}
+.atl-tab:hover { color: var(--atl-ink); }
+.atl-tab.is-active { color: var(--atl-ink); border-bottom-color: var(--atl-rose); }
+
+.atl-field { display: flex; flex-direction: column; gap: 6px; }
+.atl-field__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--atl-ink-3);
+}
+.atl-input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--atl-field-border);
+  background: var(--atl-field-bg);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--atl-ink);
+}
+.atl-input::placeholder { color: var(--atl-ink-3); font-weight: 500; }
+
+.atl-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--atl-ink-2);
+  cursor: pointer;
+  padding: 5px 0;
+}
+.atl-check input { accent-color: var(--atl-rose); width: 15px; height: 15px; }
+.atl-check__meta { margin-left: auto; font-size: 12px; color: var(--atl-ink-3); }
+
+.atl-switch {
+  position: relative;
+  width: 42px; height: 24px;
+  border-radius: var(--radius-pill);
+  background: var(--atl-track);
+  border: 0;
+  cursor: pointer;
+  flex: none;
+  transition: background var(--duration-sm) var(--ease-atl);
+}
+.atl-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: #FFF;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.24);
+  transition: transform var(--duration-sm) var(--ease-spring);
+}
+.atl-switch.is-on { background: var(--atl-grad); }
+.atl-switch.is-on::after { transform: translateX(18px); }
+
+.atl-accordion { border-bottom: 1px solid var(--atl-line); }
+.atl-accordion:last-child { border-bottom: 0; }
+.atl-accordion__head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--atl-ink);
+  cursor: pointer;
+}
+.atl-accordion__sign {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--atl-ink-3);
+  line-height: 1;
+}
+.atl-accordion__body { padding-bottom: var(--space-4); }
+.atl-accordion[hidden] { display: none; }
+
+/* ---------- Section Q: Status + chips ---------- */
+.atl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 700;
+  background: var(--atl-track);
+  color: var(--atl-ink-2);
+  white-space: nowrap;
+}
+.atl-chip--accent { background: var(--atl-accent-soft); color: var(--atl-accent-ink); }
+.atl-chip--up { background: rgba(18, 112, 70, 0.12); color: var(--atl-up); }
+.atl-chip--down { background: rgba(181, 52, 46, 0.12); color: var(--atl-down); }
+.atl-chip--warn { background: rgba(142, 90, 15, 0.13); color: var(--atl-warn); }
+
+.atl-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--atl-accent-ink-deep);   /* kickers live on bare wallpaper */
+}
+.atl-muted { color: var(--atl-ink-3); }
+.atl-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.atl-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.atl-row { display: flex; align-items: center; gap: var(--space-3); }
+.atl-row--between { justify-content: space-between; }
+.atl-row--wrap { flex-wrap: wrap; }
+
+/* ---------- Section R: Timeline (itinerary / audit trail) ---------- */
+.atl-timeline { display: grid; grid-template-columns: auto 18px minmax(0, 1fr); gap: 0 var(--space-4); }
+.atl-timeline__time {
+  display: block;
+  font-weight: 700;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.atl-timeline__date { display: block; font-size: 11.5px; color: var(--atl-ink-3); text-align: right; }
+.atl-timeline__spine { display: block; position: relative; }
+.atl-timeline__spine::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 9px;
+  bottom: -9px;
+  width: 1px;
+  border-left: 1px dashed var(--atl-line-strong);
+  transform: translateX(-50%);
+}
+.atl-timeline__row:last-child .atl-timeline__spine::before { display: none; }
+.atl-timeline__dot {
+  display: block;
+  position: relative;
+  width: 9px; height: 9px;
+  margin: 6px auto 0;
+  border-radius: 50%;
+  border: 2px solid var(--atl-accent-ink);
+  background: var(--atl-card-2-bg);
+}
+.atl-timeline__row { display: contents; }
+.atl-timeline__body { display: block; padding-bottom: var(--space-5); min-width: 0; }
+
+/* ---------- Section S: Result rows (search / booking) ---------- */
+.atl-result {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.2fr) repeat(3, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--atl-card-border);
+  background: var(--atl-card-bg);
+  transition: box-shadow var(--duration-sm) var(--ease-atl),
+              transform var(--duration-sm) var(--ease-atl);
+}
+.atl-result:hover { transform: translateY(-2px); box-shadow: var(--atl-card-shadow); }
+.atl-result.is-open { background: var(--atl-card-2-bg); box-shadow: var(--atl-card-shadow); }
+.atl-result__brand { display: flex; align-items: center; gap: var(--space-3); font-weight: 700; }
+.atl-result__logo {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: var(--atl-grad-soft);
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 800;
+  color: var(--atl-accent-ink);
+  flex: none;
+}
+.atl-result__time { display: block; font-size: 19px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.atl-result__place { display: block; font-size: 11.5px; color: var(--atl-ink-3); font-weight: 600; }
+.atl-result__price { font-size: 17px; font-weight: 800; white-space: nowrap; }
+.atl-result__price small { font-size: 12px; font-weight: 600; color: var(--atl-ink-3); }
+
+.atl-leg { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.atl-leg__line {
+  width: 100%;
+  height: 1px;
+  border-top: 1px dashed var(--atl-line-strong);
+  position: relative;
+}
+.atl-leg__line::after {
+  content: "";
+  position: absolute;
+  right: -1px; top: -3px;
+  border-left: 5px solid var(--atl-line-strong);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+
+.atl-facility { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--atl-ink-2); }
+.atl-facility svg { width: 14px; height: 14px; flex: none; opacity: 0.7; }
+
+/* ---------- Section T: Motion ---------- */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity var(--duration-md) var(--ease-atl),
+              transform var(--duration-md) var(--ease-atl);
+}
+[data-reveal].is-in { opacity: 1; transform: none; }
+
+/* Freeze contract: when the page is frozen for deterministic screenshots,
+ * every reveal resolves and every transition is cancelled. Gates render the
+ * terminal state, which is also what a no-JS reader sees in the markup. */
+html[data-motion="off"] [data-reveal] { opacity: 1; transform: none; }
+html[data-motion="off"] * {
+  transition-duration: 0s !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] { opacity: 1; transform: none; }
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+
+/* ---------- Section U: Panes (client-side routing) ---------- */
+.atl-pane[hidden] { display: none; }
+.atl-pane { display: flex; flex-direction: column; gap: var(--space-5); }
+
+/* ---------- Section V: Language toggle ---------- */
+.atl-langtoggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--atl-track);
+}
+/* Full ink, not ink-2. This control sits on the 11% --atl-track tint over the
+ * bare wallpaper — the hardest ground on the page — and at 11px mono it is
+ * small text, so it needs the full 4.5:1 with margin. ink-2 measured 4.3:1
+ * there. The selected state is already told apart by the white pill, so the
+ * unselected item does not need to be lighter to read as unselected — same
+ * rule the rail nav follows. Ink, never a lower alpha: see
+ * design-tokens.md「墨色为什么是实心值」. */
+.atl-langtoggle button {
+  border: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--atl-ink);
+  padding: 4px 11px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.atl-langtoggle button.is-active {
+  background: var(--atl-card-2-bg);
+  color: var(--atl-ink);
+}
+
+/* ---------- Section W: Footer ---------- */
+.atl-foot {
+  margin-top: var(--space-6);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--atl-ink-2);   /* the footer sits on bare wallpaper — ink-3 reads 3.4 there */
+}
+
+/* ---------- Section X: Responsive ---------- */
+@media (max-width: 1080px) {
+  .atl-app,
+  .atl-app--rail-wide { grid-template-columns: minmax(0, 1fr); }
+  .atl-rail {
+    border-right: 0;
+    border-bottom: 1px solid var(--atl-line);
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+  }
+  .atl-navgroup { flex-direction: row; }
+  .atl-navgroup__label { display: none; }
+  .atl-rail__foot { margin-top: 0; }
+  .atl-grid--main-side,
+  .atl-grid--side-main,
+  .atl-grid--3,
+  .atl-grid--4 { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 760px) {
+  .atl-page { padding: var(--space-5) var(--space-4) var(--space-8); }
+  .atl-main { padding: var(--space-4); }
+  .atl-topbar__title { font-size: 27px; }
+  .atl-figure__value { font-size: 40px; }
+  .atl-grid--2 { grid-template-columns: minmax(0, 1fr); }
+  .atl-result { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Where backdrop-filter is unavailable the glass must degrade to an opaque
+ * panel, never to a transparent one — unreadable text is worse than no blur. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .atl-app { background: var(--atl-card-2-bg); }
+}
