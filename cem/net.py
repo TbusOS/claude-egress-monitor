@@ -333,7 +333,18 @@ def timed_get(
             "Cache-Control": "no-store",
         }
         if headers:
-            hdrs = {**hdrs, **headers}
+            # 按**大小写不敏感**合并。HTTP 头名不区分大小写，但 dict 的键区分：
+            # 传进来一个 `accept`，和默认的 `Accept` 会同时留在字典里，
+            # 于是请求里发出两个 Accept 头。Cloudflare 的 DoH 接口对此直接
+            # 回 400 —— 症状是"这个源不可用"，而 Google 宽容所以没报错，
+            # 结果「两个权威源交叉验证」这个功能一直只有一个源在跑。
+            lowered = {k.lower(): k for k in hdrs}
+            for key, value in headers.items():
+                existing = lowered.get(key.lower())
+                if existing is not None:
+                    hdrs = {**hdrs, existing: value}
+                else:
+                    hdrs = {**hdrs, key: value}
         raw = f"GET {path} HTTP/1.1\r\n" + "".join(
             f"{k}: {v}\r\n" for k, v in hdrs.items()
         ) + "\r\n"

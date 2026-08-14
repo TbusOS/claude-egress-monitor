@@ -234,6 +234,26 @@
         class: 'atl-mono atl-muted', style: 'font-size:11px; overflow-wrap:anywhere;'
       }, [g.rdns]));
     }
+    // 注册局登记的网段信息。"DIRECT ALLOCATION" 说明这个段是机构直接从
+    // 注册局拿的（通常是自有网络），"ALLOCATED NON-PORTABLE" 多是运营商
+    // 分给客户的段 —— 这是判断线路性质时很硬的一条旁证。
+    if (g.rir_name || g.rir_type) {
+      body.push(el('span', {
+        class: 'atl-muted', style: 'font-size:11.5px;',
+        title: (lang() === 'en'
+          ? 'Registry record from the RIR (RDAP). Registered at allocation time.'
+          : '来自注册局的 RDAP 记录，是分配时登记的信息。DIRECT ALLOCATION 通常表示机构自有网段；ALLOCATED NON-PORTABLE 多为运营商分配给客户的段。')
+      }, [
+        (g.rir ? g.rir.toUpperCase() + ' · ' : '') +
+        [g.rir_name, g.rir_type].filter(Boolean).join(' · ')
+      ]));
+    }
+    if (g.cloud_provider) {
+      body.push(el('span', { class: 'atl-chip atl-chip--warn' }, [
+        (lang() === 'en' ? 'in ' : '命中 ') + g.cloud_provider +
+        (lang() === 'en' ? ' official ranges' : ' 官方地址段')
+      ]));
+    }
 
     // 一致性级别 —— 「国家相同」不等于「出口相同」，所以这里分五档而不是两档
     if (card.level) {

@@ -283,6 +283,8 @@ cem/
   checks.py      环境级检查（IPv6 / 时钟 / 证书 / DoH 交叉验证 / 代理端口）
   history.py     按天归档的紧凑记录 + 日汇总 + 删除
   telemetry.py   从 Claude Code 二进制静态提取遥测字段
+  cloudranges.py 云厂商官方 IP 段（确证级证据），24 小时刷新
+  rdap.py        RIR 官方注册信息，用 IANA bootstrap 定位该查哪个注册局
   pathtrace.py   可选：mtr 路径质量（跳数 / 丢包），没装则降级
   demo.py        虚构演示数据（RFC 5737 保留地址）
 web/

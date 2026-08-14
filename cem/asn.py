@@ -223,6 +223,10 @@ def _merge(base: Optional[AsnInfo], extra: Optional[AsnInfo]) -> Optional[AsnInf
                     else extra.proxy_flag),
         cloud_provider=base.cloud_provider or extra.cloud_provider,
         cloud_prefix=base.cloud_prefix or extra.cloud_prefix,
+        rir=base.rir or extra.rir,
+        rir_name=base.rir_name or extra.rir_name,
+        rir_type=base.rir_type or extra.rir_type,
+        rir_hint=base.rir_hint or extra.rir_hint,
         timezone=base.timezone or extra.timezone,
         loc=base.loc or extra.loc,
         rdns=base.rdns or extra.rdns,
@@ -235,10 +239,11 @@ class AsnCache:
     """线程安全的磁盘缓存。采样线程和 HTTP 线程会同时查。"""
 
     def __init__(self, path: Optional[FsPath] = None, *, want_city: bool = True,
-                 cloud=None):
+                 cloud=None, with_rdap: bool = True):
         self._path = path
         self._want_city = want_city
         self._cloud = cloud
+        self._with_rdap = with_rdap
         self._lock = threading.Lock()
         self._mem: dict[str, AsnInfo] = {}
         if path and path.exists():
@@ -278,10 +283,12 @@ class AsnCache:
 
         with self._lock:
             hit = self._mem.get(ip)
-        # 命中缓存但缺城市时不直接返回：那多半是上次查的时候地理数据源
-        # 限流了，而不是"这个地址真的没有城市"。缓存一个残缺结果会让
-        # 界面永远显示不出城市，且没人知道为什么。
-        if hit and not (self._want_city and hit.city is None):
+        # 命中缓存但缺城市 / 缺 RIR 信息时不直接返回：那多半是上次查的时候
+        # 数据源限流了，而不是"这个地址真的没有这些信息"。缓存一个残缺结果
+        # 会让界面永远显示不出来，且没人知道为什么。
+        stale = ((self._want_city and hit.city is None) or
+                 (self._with_rdap and hit.rir is None)) if hit else False
+        if hit and not stale:
             return hit
 
         info = hit or lookup_cymru(ip)
@@ -299,6 +306,18 @@ class AsnCache:
         rdns = lookup_rdns(ip)
         if rdns:
             info = _merge(info, AsnInfo(ip=ip, rdns=rdns, source="rdns"))
+        # RIR 注册信息：官方登记的事实。**总是查**而不是只在别的源没结论时查 ——
+        # 网段名和分配类型本身就是要展示的内容（"DIRECT ALLOCATION" 说明这个
+        # 段是直接从注册局拿的，通常是机构自有而非运营商分配）。
+        # 一个出口地址只查一次，结果落盘缓存，成本可以忽略。
+        if self._with_rdap:
+            from . import rdap as rdapmod
+            got = rdapmod.lookup(ip)
+            if got.ok:
+                info = _merge(info, AsnInfo(
+                    ip=ip, rir=got.registry, rir_name=got.name,
+                    rir_type=got.type, rir_hint=got.hint, source="rdap",
+                ))
         # 厂商官方地址段：命中就是确证级证据，优先级高于所有第三方判断。
         if self._cloud is not None:
             hit = self._cloud.lookup(ip)

@@ -14,5 +14,11 @@
 在一个主题是"出网流量"的页面上这件事值得点明：那是一个到第三方的请求。
 删掉 `index.html` 里 `fonts.css` 那一行即可去掉它，页面用系统字体栈照样可读。
 
+**对 skill 原文件做过一处改动**：`fonts.css` 里 `display=swap` 改成了
+`display=optional`。实测 swap 会在字体到达后重排整页，渲染闸量到
+CLS 0.21（阈值 0.1）；而这个工具的使用者都在代理后面，Google Fonts
+经常被拦，swap 之下那是一次迟到的跳变。改动的理由和代价写在
+`fonts.css` 的注释里。除此之外三个文件与 skill 一致。
+
 本仓页面自己的样式写在 `index.html` 的 `<style>` 里，一律用**无前缀** class
 （`.surface-card`、`.tele-row` 之类）；`atl-` 前缀的都属于上面那套 skill。

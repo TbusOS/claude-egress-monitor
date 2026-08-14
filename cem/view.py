@@ -101,6 +101,7 @@ def _asn_payload(info) -> Optional[dict]:
         "confidence_label": info.kind_confidence_label,
         "cloud_provider": info.cloud_provider,
         "cloud_prefix": info.cloud_prefix,
+        "rir": info.rir, "rir_name": info.rir_name, "rir_type": info.rir_type,
     }
 
 

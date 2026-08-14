@@ -9,7 +9,7 @@ from __future__ import annotations
 import unittest
 
 from cem import diagnose as dx
-from cem import history, pathtrace, telemetry
+from cem import cloudranges, history, pathtrace, rdap, telemetry
 from cem.model import AsnInfo, Check, Sample, Timing, TraceView
 
 
@@ -332,6 +332,108 @@ class TestTelemetryExtraction(unittest.TestCase):
         取第一条匹配会拿到一个碎片，什么都提取不出来。"""
         blob = "http-intake.logs frag\n" + self.BUNDLE
         self.assertTrue(telemetry.parse_bundle(blob).ok)
+
+
+class TestRdap(unittest.TestCase):
+    # 地址取自 RFC 5737 文档保留段，机构名虚构 —— 测试样本不该带任何
+    # 真实的出口地址或运营商名，那是运行这个工具的人的网络信息。
+    APNIC = """{"handle":"203.0.113.0 - 203.0.113.255","name":"EXAMPLENET",
+      "type":"ALLOCATED NON-PORTABLE","country":"SG",
+      "startAddress":"203.0.113.0","endAddress":"203.0.113.255",
+      "remarks":[{"description":["EXAMPLE-TELECOM","Broadband service"]}],
+      "entities":[{"handle":"IRT-X","roles":["abuse"]}]}"""
+
+    PLACEHOLDER = """{"handle":"192.0.2.0 - 192.0.2.255",
+      "name":"IANA-NETBLOCK-192","type":"ALLOCATED PORTABLE",
+      "remarks":[{"description":["This network range is not allocated to APNIC."]}]}"""
+
+    def test_parse_basic_fields(self):
+        got = rdap.parse_rdap(self.APNIC, "203.0.113.24", "apnic")
+        self.assertEqual(got.name, "EXAMPLENET")
+        self.assertEqual(got.type, "ALLOCATED NON-PORTABLE")
+        self.assertEqual(got.abuse_contact, "IRT-X")
+        self.assertTrue(got.ok)
+
+    def test_placeholder_is_not_accepted(self):
+        """RIR 对不归自己管的段返回**占位记录**而不是 404 —— 有 name 有 type，
+        看起来完全像有效答案。按"有 name 就算成功"判定的话，
+        查一个美国地址会拿到 APNIC 的占位数据。
+        一个看起来正常的错误答案比报错糟糕得多。"""
+        got = rdap.parse_rdap(self.PLACEHOLDER, "192.0.2.10", "apnic")
+        self.assertFalse(got.ok)
+
+    def test_hint_from_remarks(self):
+        got = rdap.parse_rdap(self.APNIC, "203.0.113.24", "apnic")
+        self.assertEqual(got.hint, "residential-ish")
+        self.assertIn("broadband", got.hint_evidence.lower())
+
+    def test_hint_is_none_when_nothing_matches(self):
+        """判不出来就返回 None，不猜。"""
+        payload = '{"name":"AP-2440","type":"DIRECT ALLOCATION"}'
+        self.assertIsNone(rdap.parse_rdap(payload, "1.2.3.4", "arin").hint)
+
+    def test_bad_payload(self):
+        got = rdap.parse_rdap("not json", "1.2.3.4", "arin")
+        self.assertFalse(got.ok)
+        self.assertIn("JSON", got.error)
+
+    def test_ip_format_is_validated(self):
+        """IP 会被拼进 URL。不校验等于把这个函数变成任意 URL 请求器。"""
+        got = rdap.lookup("evil.example.com/../../")
+        self.assertIn("格式", got.error)
+
+
+class TestCloudRanges(unittest.TestCase):
+    def test_parse_aws(self):
+        payload = ('{"prefixes":[{"ip_prefix":"52.94.0.0/22"}],'
+                   '"ipv6_prefixes":[{"ipv6_prefix":"2600:1f00::/24"}]}')
+        self.assertEqual(cloudranges.parse_aws(payload),
+                         ("52.94.0.0/22", "2600:1f00::/24"))
+
+    def test_parse_gcp(self):
+        payload = '{"prefixes":[{"ipv4Prefix":"34.149.0.0/16"},{"ipv6Prefix":"2600::/32"}]}'
+        self.assertEqual(cloudranges.parse_gcp(payload),
+                         ("34.149.0.0/16", "2600::/32"))
+
+    def test_parse_plain_lines_skips_comments(self):
+        self.assertEqual(
+            cloudranges.parse_plain_lines("# note\n1.1.1.0/24\n\n2.2.2.0/24"),
+            ("1.1.1.0/24", "2.2.2.0/24"))
+
+    def test_parse_do_csv_takes_first_column(self):
+        self.assertEqual(
+            cloudranges.parse_do_csv("1.2.3.0/24,US,CA\nbad line"),
+            ("1.2.3.0/24",))
+
+    def test_bad_payloads_are_empty_not_exceptions(self):
+        for fn in (cloudranges.parse_aws, cloudranges.parse_gcp,
+                   cloudranges.parse_oracle):
+            self.assertEqual(fn("nope"), ())
+
+    def test_lookup_matches_and_misses(self):
+        cr = cloudranges.CloudRanges()
+        cr._index((("34.149.0.0/16", "Google Cloud", "gcp"),))
+        hit = cr.lookup("34.149.66.165")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.provider, "Google Cloud")
+        # 命中 = 一定是机房；没命中不代表不是 —— 只覆盖几家大厂
+        self.assertIsNone(cr.lookup("8.8.8.8"))
+
+    def test_lookup_rejects_junk(self):
+        self.assertIsNone(cloudranges.CloudRanges().lookup("not-an-ip"))
+
+
+class TestHeaderMerge(unittest.TestCase):
+    def test_case_insensitive_header_override(self):
+        """HTTP 头名不区分大小写，但 dict 的键区分。传进一个小写 `accept`
+        会和默认的 `Accept` 同时存在，于是发出两个 Accept 头 ——
+        Cloudflare 的 DoH 接口对此直接回 400。症状是"这个源不可用"，
+        而 Google 宽容所以没报错，结果两源交叉验证一直只有一个源在跑。"""
+        from cem import net
+        import inspect
+        src = inspect.getsource(net.timed_get)
+        self.assertIn("lowered", src)
+        self.assertIn("k.lower()", src)
 
 
 class TestHistorySummary(unittest.TestCase):

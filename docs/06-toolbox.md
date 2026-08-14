@@ -15,6 +15,8 @@
 | 出口 IP / 地区 / 边缘机房 | 向 Cloudflare 的 `cdn-cgi/trace` 发请求 | 目的地那侧看到的你是谁 |
 | 出口归属（ASN / 运营商） | Team Cymru 的 DNS 接口（读 BGP 全表） | 这个地址属于谁的网络 |
 | 出口城市 / 时区 | ip-api、ipinfo 免费额度 | 国家相同时，靠城市区分两个出口 |
+| 网段注册信息 | RDAP（RIR 官方，IANA bootstrap 定位） | 这个段是机构自有还是运营商分配 |
+| 是不是大厂机房 | AWS / GCP / Cloudflare 等**自己发布**的地址段 | 确证级判定，非推断 |
 | 机房还是家宽 | ip-api 的 `hosting` / `mobile` / `proxy` 标志 + 组织名 / rDNS 启发式 | 风控权重差别最大的属性 |
 | 反向解析 | `dig -x` | 机器叫什么名字，常直接暴露机房 |
 | 四段延迟 | 裸 socket + ssl，自己掐表 | 慢在 DNS / TCP / TLS / 服务端哪一段 |
@@ -155,9 +157,23 @@ IDA / Ghidra / Frida 解决的是「**这个二进制在算什么**」。
 
 ### 其他免费源
 
-- **RDAP**（IETF 标准，RIR 官方，免费无限制）：`https://rdap.apnic.net/ip/<ip>`
-  返回结构化 JSON，带 `name` / `type` / `remarks`。分配注册时写的，
-  比第三方推断可信。
+- **RDAP**（IETF 标准，RIR 官方，免费无限制）—— **已接入**。
+  返回结构化 JSON，带网段名、分配类型、备注、abuse 联系人。
+  分配注册时写的，比第三方推断硬一档，但不到确证（登记可能陈旧，
+  各 RIR 命名习惯不同）。
+
+  实测的两种典型值，含义差别很大：
+
+  | 类型 | 含义 |
+  |---|---|
+  | `DIRECT ALLOCATION` | 机构**直接从注册局**拿的段，通常是自有网络（Google、Anthropic 都是这种） |
+  | `ALLOCATED NON-PORTABLE` | 运营商分配给客户的段，不可携带 —— 更像宽带线路 |
+
+  **必须用 IANA bootstrap 定位该查哪个 RIR，不能挨个试。**
+  RIR 对不归自己管的段返回的是**占位记录**而不是 404：拿 APNIC 查一个
+  美国地址会得到 `IANA-NETBLOCK-34` + "not allocated to APNIC"，
+  有 name 有 type，看起来完全像一条有效答案。照单全收就等于给出错误的
+  注册信息 —— 一个看起来正常的错误答案比报错糟糕得多。
 - **Team Cymru DNS**（已用）：读 BGP 全表，ASN 的权威来源。
 - **开源离线数据集**：`sapics/ip-location-db`（CC0/MIT）、`ipverse/asn-ip`、
   `X4BNet/lists_vpn`。适合完全离线跑，代价是数据没有实时源新。

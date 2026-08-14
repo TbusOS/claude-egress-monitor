@@ -61,6 +61,12 @@ class AsnInfo:
     # AWS 说这个段是它的，那就是它的，不存在判断失误。
     cloud_provider: Optional[str] = None
     cloud_prefix: Optional[str] = None
+    # RIR 注册信息（RDAP）。它是**注册时登记的事实**，比第三方推断硬一档，
+    # 但仍不是确证：登记可能陈旧，命名习惯各家不同，没有统一规范。
+    rir: Optional[str] = None            # 哪个注册局
+    rir_name: Optional[str] = None       # 网段名
+    rir_type: Optional[str] = None       # 分配类型
+    rir_hint: Optional[str] = None       # 从注册信息读出的用途线索
     source: Optional[str] = None
 
     # ── 出口类型：机房还是家宽 ──────────────────────────────────
@@ -100,6 +106,9 @@ class AsnInfo:
             return self.CONF_CONFIRMED
         if self.mobile or self.hosting is not None:
             return self.CONF_LIKELY
+        if self.rir_hint:
+            # RIR 注册信息是官方登记的，比纯组织名猜测硬，但不到确证
+            return self.CONF_LIKELY
         if self._guess_kind() != self.KIND_UNKNOWN:
             return self.CONF_GUESS
         return self.CONF_UNKNOWN
@@ -128,8 +137,13 @@ class AsnInfo:
         return self._guess_kind()
 
     def _guess_kind(self) -> str:
-        """没有标志位时的启发式兜底。"""
-        blob = " ".join(filter(None, [self.org, self.rdns])).lower()
+        """没有标志位时的启发式兜底。RIR 登记的用途线索优先于组织名。"""
+        if self.rir_hint == "datacenter":
+            return self.KIND_DATACENTER
+        if self.rir_hint == "residential-ish":
+            return self.KIND_RESIDENTIAL
+        blob = " ".join(filter(None,
+                               [self.org, self.rdns, self.rir_name])).lower()
         if not blob:
             return self.KIND_UNKNOWN
         dc_words = ("hosting", "cloud", "vps", "datacenter", "data center",
@@ -153,6 +167,10 @@ class AsnInfo:
                     f"不是第三方推断")
         if self.mobile:
             return "数据源标记为移动蜂窝网络"
+        if self.rir_hint and self.hosting is None:
+            return (f"RIR 注册信息（{self.rir or '?'}）：网段名 "
+                    f"{self.rir_name or '—'}，类型 {self.rir_type or '—'} —— "
+                    f"这是分配时登记的，比第三方推断硬，但登记可能陈旧")
         if self.hosting is True:
             return "数据源标记为机房 / 托管网络"
         if self.hosting is False and self.mobile is False:
