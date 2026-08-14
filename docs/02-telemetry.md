@@ -73,6 +73,27 @@ dig +short TXT <d>.<c>.<b>.<a>.origin.asn.cymru.com
 
 ---
 
+## 二点五、一条命令看全部字段
+
+```bash
+python3 -m cem telemetry              # 人读
+python3 -m cem telemetry --all-events # 连 182 个事件名一起列
+python3 -m cem telemetry --json       # 机读
+```
+
+它从**你本机安装的那个版本**里现读，不是一份写死的清单 ——
+写死的清单过两个版本就是错的，而且没人知道它错了。
+
+几个直接读得出来的结论：
+
+- `hostname` 是硬编码的字符串 `"claude-code"`，**不会上报你的真实主机名**
+- `head_sha` 会上报当前 git HEAD 的 commit sha
+- 有个函数叫 `stripPiiFieldsForDatadog` —— 上报前会主动剥离 PII 字段
+- 事件名有白名单，不在名单里的事件发不出去
+
+边界见 [06-toolbox.md](06-toolbox.md)：静态提取只能知道「会发哪些字段」，
+不知道「某一次具体发了什么值」。
+
 ## 三、CLI 里的硬编码证据
 
 ```bash

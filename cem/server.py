@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
+from . import history as histmod
 from . import view
 from .model import Sample
 from .sampler import Sampler, clamp_interval
@@ -86,6 +87,7 @@ class _Handler(BaseHTTPRequestHandler):
     sampler: Sampler
     bus: Broadcaster
     web_root: Path
+    day_store: object
 
     def log_message(self, fmt: str, *args) -> None:      # noqa: A003
         """默认的 stderr 访问日志会把每次 SSE 心跳都刷出来，关掉。"""
@@ -145,7 +147,16 @@ class _Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._serve_static("index.html")
         elif path == "/api/state":
-            self._send_json(view.snapshot(self.history, self.sampler))
+            self._send_json(view.snapshot(self.history, self.sampler,
+                                          self.day_store))
+        elif path == "/api/days":
+            self._send_json(view.day_payload(self.day_store))
+        elif path == "/api/day":
+            self._day_detail()
+        elif path == "/api/telemetry":
+            # 这一项要跑 strings 扫一个 300MB 的文件，比较慢，
+            # 所以不塞进 /api/state，单独按需拉。
+            self._send_json(view.telemetry_payload())
         elif path == "/api/status":
             self._send_json(self.sampler.status())
         elif path == "/api/stream":
@@ -159,9 +170,12 @@ class _Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/api/monitor":
             self._monitor()
+        elif path == "/api/days/delete":
+            self._delete_days()
         elif path == "/api/sample":
             sample = self.sampler.sample_now()
-            self.bus.publish(view.snapshot(self.history, self.sampler))
+            self.bus.publish(view.snapshot(self.history, self.sampler,
+                                           self.day_store))
             self._send_json({"ok": True, "seq": sample.seq})
         else:
             self._send_error_json(404, "not found")
@@ -195,8 +209,60 @@ class _Handler(BaseHTTPRequestHandler):
             status = self.sampler.start(interval_s=interval)
         else:
             status = self.sampler.stop()
-        self.bus.publish(view.snapshot(self.history, self.sampler))
+        self.bus.publish(view.snapshot(self.history, self.sampler,
+                                       self.day_store))
         self._send_json(status)
+
+    def _day_detail(self) -> None:
+        """某一天（或几天）的汇总。参数 ?day=YYYY-MM-DD，可重复。"""
+        from urllib.parse import parse_qs, urlparse as _urlparse
+        query = parse_qs(_urlparse(self.path).query)
+        days = query.get("day") or []
+        bad = [d for d in days if not histmod.valid_day(d)]
+        if bad:
+            self._send_error_json(400, f"日期格式不对：{', '.join(bad)}")
+            return
+        if not days:
+            self._send_error_json(400, "至少要给一个 day 参数")
+            return
+        store = self.day_store
+        if store is None or not store.enabled:
+            self._send_error_json(404, "没有开启历史归档")
+            return
+        summaries = store.summaries(days)
+        self._send_json({
+            "days": list(summaries),
+            "combined": histmod.combine(summaries),
+        })
+
+    def _delete_days(self) -> None:
+        """删掉指定的几天。历史会越攒越多，删除必须是一等功能。"""
+        data = self._read_json()
+        if data is None:
+            self._send_error_json(400, "需要 JSON 请求体")
+            return
+        unknown = set(data) - {"days"}
+        if unknown:
+            self._send_error_json(400, f"不认识的字段：{', '.join(sorted(unknown))}")
+            return
+        days = data.get("days")
+        if not isinstance(days, list) or not days:
+            self._send_error_json(400, "days 必须是非空数组")
+            return
+        if not all(isinstance(d, str) for d in days):
+            self._send_error_json(400, "days 里必须都是字符串")
+            return
+        store = self.day_store
+        if store is None or not store.enabled:
+            self._send_error_json(404, "没有开启历史归档")
+            return
+        done, rejected = store.delete(days)
+        if rejected:
+            self._send_error_json(
+                400, f"这些日期不合法或删不掉：{', '.join(rejected)}")
+            return
+        self._send_json({"deleted": list(done),
+                         "remaining": list(store.days())})
 
     def _stream(self) -> None:
         q = self.bus.subscribe()
@@ -207,7 +273,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self._sse_send({"type": "snapshot",
-                            "data": view.snapshot(self.history, self.sampler)})
+                            "data": view.snapshot(self.history, self.sampler,
+                                                  self.day_store)})
             while True:
                 try:
                     payload = q.get(timeout=15)
@@ -235,12 +302,13 @@ def build_server(
     history: Optional[History] = None,
     sampler: Optional[Sampler] = None,
     web_root: Path = WEB_ROOT,
+    day_store=None,
 ) -> tuple[ThreadingHTTPServer, Sampler, History, Broadcaster]:
     hist = history or History()
     bus = Broadcaster()
 
     def on_sample(_sample: Sample) -> None:
-        bus.publish(view.snapshot(hist, smp))
+        bus.publish(view.snapshot(hist, smp, day_store))
 
     smp = sampler or Sampler(hist, on_sample=on_sample)
     if sampler is not None:
@@ -248,6 +316,7 @@ def build_server(
 
     handler = type("Handler", (_Handler,), {
         "history": hist, "sampler": smp, "bus": bus, "web_root": web_root,
+        "day_store": day_store,
     })
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

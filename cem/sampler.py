@@ -72,8 +72,10 @@ class Sampler:
         config: Optional[SamplerConfig] = None,
         asn_cache: Optional[AsnCache] = None,
         on_sample: Optional[Callable[[Sample], None]] = None,
+        day_store=None,
     ):
         self._history = history
+        self._day_store = day_store
         self._config = config or SamplerConfig()
         self._asn = asn_cache
         self._on_sample = on_sample
@@ -114,6 +116,7 @@ class Sampler:
                 "interval_s": self._config.interval_s,
                 "samples": self._seq,
                 "persisting": self._history.persisting,
+                "archiving": bool(self._day_store and self._day_store.enabled),
                 "last_error": self._last_error,
             }
 
@@ -179,6 +182,9 @@ class Sampler:
             timeout=cfg.timeout,
         )
         self._history.add(sample)
+        # 长期历史落盘：紧凑记录，一轮几百字节，按天分文件。
+        if self._day_store is not None:
+            self._day_store.append(sample)
         if self._on_sample:
             self._on_sample(sample)
         return sample

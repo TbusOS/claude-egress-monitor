@@ -27,6 +27,30 @@ MAX_BODY = 64 * 1024
 
 
 @dataclass(frozen=True)
+class TlsInfo:
+    """这次 TLS 握手拿到的证书信息。
+
+    为什么要采：**中间人劫持最直接的证据就在证书里**。正常访问
+    claude.ai 拿到的应该是公共 CA（Let's Encrypt / Google Trust 之类）
+    签发、SAN 里含 claude.ai 的证书。如果某天颁发者变成了一个企业
+    自签根、或者 SAN 对不上，说明有东西在中间拆开了你的 TLS ——
+    公司设备管理软件、某些"加速"客户端、以及真正的攻击都会这样。
+
+    只读证书的公开字段，不做任何解密。
+    """
+
+    version: Optional[str] = None       # TLSv1.3 …
+    cipher: Optional[str] = None
+    issuer: Optional[str] = None        # 颁发者组织名
+    subject: Optional[str] = None       # 证书主体 CN
+    not_after: Optional[str] = None     # 到期时间
+    days_left: Optional[int] = None
+    san_count: Optional[int] = None
+    san_match: Optional[bool] = None    # SAN 里有没有这次访问的域名
+    alpn: Optional[str] = None          # 协商出来的应用层协议
+
+
+@dataclass(frozen=True)
 class HttpResult:
     ok: bool
     status: Optional[int] = None
@@ -37,6 +61,7 @@ class HttpResult:
     error: Optional[str] = None
     # 代理路径下 DNS 由代理服务器完成，本机这一段只解析了代理地址本身。
     dns_by_proxy: bool = False
+    tls: Optional[TlsInfo] = None
 
 
 def _ms(t0: float, t1: float) -> float:
@@ -46,7 +71,90 @@ def _ms(t0: float, t1: float) -> float:
 def _tls_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    # **只**申报 http/1.1。本模块发的是 HTTP/1.1 请求，一旦申报了 h2
+    # 就会和服务端协商出 HTTP/2，然后服务端用 h2 帧回话、这里按 1.1 解析，
+    # 整个探测直接失败。加 ALPN 的那一刻这个 bug 就出现了，
+    # 现象是所有 trace 全部 ok=False —— 教训：ALPN 要和你真会说的协议一致。
+    try:
+        ctx.set_alpn_protocols(["http/1.1"])
+    except NotImplementedError:
+        pass
     return ctx
+
+
+def _name_of(pairs) -> Optional[str]:
+    """把 ssl 模块给的 ((('organizationName','X'),), …) 结构压成一个名字。
+
+    优先组织名，没有就退到 CN —— 读者要认的是"谁签的"，
+    而 Let's Encrypt 这类只有 CN。
+    """
+    if not pairs:
+        return None
+    flat = {}
+    for rdn in pairs:
+        for key, value in rdn:
+            flat.setdefault(key, value)
+    return flat.get("organizationName") or flat.get("commonName")
+
+
+def read_tls_info(sock: "ssl.SSLSocket", host: str) -> TlsInfo:
+    """从已完成握手的连接上读证书信息。不发任何额外请求。"""
+    try:
+        cert = sock.getpeercert() or {}
+    except (ValueError, OSError):
+        cert = {}
+    cipher = None
+    try:
+        got = sock.cipher()
+        cipher = got[0] if got else None
+    except (ValueError, OSError):
+        pass
+
+    not_after = cert.get("notAfter")
+    days_left = None
+    if not_after:
+        try:
+            expiry = ssl.cert_time_to_seconds(not_after)
+            days_left = int((expiry - time.time()) // 86400)
+        except (ValueError, TypeError):
+            days_left = None
+
+    alt = cert.get("subjectAltName") or ()
+    sans = [v for k, v in alt if k == "DNS"]
+    ip_sans = [v for k, v in alt if k == "IP Address"]
+    match = None
+    # 按 IP 直连时（对照组 1.1.1.1 就是这样），证书里的**域名** SAN 当然
+    # 对不上，要比的是 IP SAN。早先只比 DNS SAN，于是每轮都报一次
+    # "证书 SAN 对不上"的严重告警 —— 一个假阳性的安全告警比没有告警更糟，
+    # 因为它会让人开始忽略这一栏。
+    looks_like_ip = host.replace(".", "").isdigit() or ":" in host
+    if looks_like_ip:
+        match = host in ip_sans if ip_sans else None
+    elif sans:
+        needle = host.lower()
+        match = any(
+            needle == s.lower() or
+            (s.startswith("*.") and needle.endswith(s[1:].lower()))
+            for s in sans
+        )
+
+    alpn = None
+    try:
+        alpn = sock.selected_alpn_protocol()
+    except (AttributeError, OSError):
+        pass
+
+    return TlsInfo(
+        version=getattr(sock, "version", lambda: None)(),
+        cipher=cipher,
+        issuer=_name_of(cert.get("issuer")),
+        subject=_name_of(cert.get("subject")),
+        not_after=not_after,
+        days_left=days_left,
+        san_count=len(sans) or None,
+        san_match=match,
+        alpn=alpn,
+    )
 
 
 def _read_until_headers(sock: socket.socket) -> tuple[bytes, bytes]:
@@ -205,10 +313,12 @@ def timed_get(
         peer = sock.getpeername()
         peer_ip, peer_port = str(peer[0]), int(peer[1])
 
+        tls_info: Optional[TlsInfo] = None
         if parsed.scheme == "https":
             t0 = time.perf_counter()
             sock = _tls_context().wrap_socket(sock, server_hostname=host)
             timing_tls = _ms(t0, time.perf_counter())
+            tls_info = read_tls_info(sock, host)
 
         hdrs = {
             "Host": host if port in (80, 443) else f"{host}:{port}",
@@ -250,6 +360,7 @@ def timed_get(
             peer_ip=peer_ip,
             peer_port=peer_port,
             dns_by_proxy=bool(proxy),
+            tls=tls_info,
             timing=Timing(
                 dns_ms=timing_dns,
                 tcp_ms=timing_tcp,
@@ -324,6 +435,7 @@ def tcp_probe(
             peer_ip=str(peer[0]),
             peer_port=int(peer[1]),
             dns_by_proxy=bool(proxy),
+            tls=read_tls_info(sock, host),
             timing=Timing(
                 dns_ms=timing_dns, tcp_ms=timing_tcp, tls_ms=timing_tls,
                 total_ms=_ms(t_start, time.perf_counter()),
@@ -349,6 +461,8 @@ def tcp_probe(
 
 __all__ = [
     "DEFAULT_TIMEOUT",
+    "TlsInfo",
+    "read_tls_info",
     "DEFAULT_UA",
     "HttpResult",
     "dechunk",

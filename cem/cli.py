@@ -5,6 +5,7 @@
     cem doctor      我这台机器上，三个入口分别走哪条路？
     cem probe       现在这一刻，它们的出口 IP / 地区 / 延迟是什么？
     cem endpoints   Claude 到底会连哪些域名，各自干什么？
+    cem telemetry   遥测到底会上报哪些字段？（静态提取，不解密）
     cem serve       把界面端起来，开着看。
 """
 
@@ -25,6 +26,7 @@ from .asn import AsnCache
 from .model import Sample
 from .resolve import read_scutil_dns
 from .sampler import DEFAULT_INTERVAL_S, Sampler, SamplerConfig
+from .history import DayStore
 from .server import build_server
 from .store import History
 
@@ -187,15 +189,83 @@ def cmd_endpoints(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------- telemetry
+
+
+def cmd_telemetry(args: argparse.Namespace) -> int:
+    from . import telemetry as tele
+    report = tele.inspect()
+    if args.json:
+        json.dump(tele.to_json(report), sys.stdout, ensure_ascii=False, indent=2)
+        print()
+        return 0
+    if not report.ok:
+        print(f"提取失败：{report.error}")
+        return 1
+
+    print(f"Claude Code 的遥测上报（版本 {report.version}）")
+    print("=" * 78)
+    print("这是**静态提取** —— 只读你自己电脑上那个文件里的明文字符串，")
+    print("不解密任何流量、不注入任何进程、不修改任何东西。")
+    print()
+    print(f"  接入点  ： {_fmt(report.intake_url)}")
+    print(f"  凭据    ： {_fmt(report.client_token_prefix)}（Datadog 公开 client token）")
+    print(f"  攒批    ： 每 {_fmt(report.flush_interval_ms)} 毫秒一批，"
+          f"上限 {_fmt(report.batch_limit)} 条")
+
+    if report.envelope:
+        print("\n信封字段（Datadog 日志格式要求的）")
+        print("-" * 78)
+        for key, value in report.envelope:
+            print(f"  {key:<12} {value}")
+
+    if report.payload_fields:
+        print("\n业务字段")
+        print("-" * 78)
+        print("  " + "、".join(report.payload_fields))
+
+    if report.behaviours:
+        print("\n代码里能读出来的行为")
+        print("-" * 78)
+        for name, meaning in report.behaviours:
+            print(f"  {name:<32} {meaning}")
+
+    if report.event_names:
+        print(f"\n事件名白名单（{len(report.event_names)} 个）")
+        print("-" * 78)
+        limit = len(report.event_names) if args.all_events else 24
+        for name in report.event_names[:limit]:
+            print(f"  {name}")
+        if limit < len(report.event_names):
+            print(f"  …… 还有 {len(report.event_names) - limit} 个，加 --all-events 全看")
+
+    if report.env_vars:
+        print("\n相关环境变量")
+        print("-" * 78)
+        for name in report.env_vars:
+            print(f"  {name}")
+
+    print("\n边界")
+    print("-" * 78)
+    print("  静态提取只能知道**会**发哪些字段，不知道某一次具体发了什么值。")
+    print("  后者要解密 TLS —— 需要装根 CA，而根 CA 私钥泄露意味着本机所有")
+    print("  HTTPS 都可被解密。这个代价大于收益，本仓不做。见 docs/06-toolbox.md。")
+    return 0
+
+
 # ------------------------------------------------------------------- serve
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
     jsonl = Path(args.persist).expanduser() if args.persist else None
     history = History(jsonl_path=jsonl)
+    archive_dir = (None if args.no_archive
+                   else Path(args.archive).expanduser())
+    day_store = DayStore(archive_dir)
     cache = _asn_cache(Path(args.cache_dir) if args.cache_dir else None)
     sampler = Sampler(
         history,
+        day_store=day_store,
         config=SamplerConfig(
             interval_s=args.interval,
             include_optional=args.all,
@@ -207,6 +277,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
     httpd, sampler, history, _bus = build_server(
         host=args.host, port=args.port, history=history, sampler=sampler,
+        day_store=day_store,
     )
     if args.demo:
         from . import demo
@@ -216,8 +287,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     url = f"http://{args.host}:{args.port}/"
     print(f"界面： {url}")
     print(f"监控： {'已自动开启' if args.start else '默认关闭 —— 在界面上按开关启动'}")
+    if archive_dir:
+        print(f"历史： {archive_dir}（按天分文件的紧凑记录，界面上可查可删）")
     if jsonl:
-        print(f"落盘： {jsonl}（含真实 IP，注意别提交进仓库）")
+        print(f"全量： {jsonl}（含真实 IP，注意别提交进仓库）")
     print("Ctrl-C 结束。")
     if args.start:
         sampler.start()
@@ -269,6 +342,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ep.add_argument("--json", action="store_true")
     p_ep.set_defaults(func=cmd_endpoints)
 
+    p_tele = sub.add_parser("telemetry",
+                            help="静态提取 Claude Code 的遥测上报字段")
+    p_tele.add_argument("--json", action="store_true")
+    p_tele.add_argument("--all-events", action="store_true",
+                        help="列出全部事件名，不截断")
+    p_tele.set_defaults(func=cmd_telemetry)
+
     p_serve = sub.add_parser("serve", parents=[common], help="启动网页界面")
     p_serve.add_argument("--host", default="127.0.0.1",
                          help="监听地址，默认只听回环，不建议改")
@@ -280,6 +360,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--open", action="store_true", help="顺手打开浏览器")
     p_serve.add_argument("--persist", default=None,
                          help="把每轮采样追加到这个 JSONL 文件")
+    p_serve.add_argument("--archive", default="./data/days",
+                         help="长期历史目录，按天分文件，默认 ./data/days")
+    p_serve.add_argument("--no-archive", action="store_true",
+                         help="完全不落盘长期历史")
     p_serve.add_argument("--demo", action="store_true",
                          help="注入几轮虚构数据（文档保留地址），用来看界面 / 出截图，"
                               "一个探测都不发")

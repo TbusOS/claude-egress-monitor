@@ -136,6 +136,14 @@
 
   // ------------------------------------------------------------ 渲染：入口卡
 
+  var LEVEL_TONE = {
+    'identical': 'atl-chip--up',
+    'dual-stack': 'atl-chip',
+    'same-network': 'atl-chip',
+    'multi-network': 'atl-chip--warn',
+    'multi-country': 'atl-chip--down'
+  };
+
   function surfaceCard(card) {
     var body = [];
 
@@ -156,26 +164,83 @@
         txt(card.country_label || card.country)
       ])
     ]);
-    if (card.colo) {
-      geo.appendChild(el('span', { class: 'atl-chip' }, [card.colo]));
-    }
+    if (card.colo) geo.appendChild(el('span', { class: 'atl-chip' }, [card.colo]));
+    if (card.family) geo.appendChild(el('span', { class: 'atl-chip' }, [card.family]));
     if (card.restricted) {
-      var warn = el('span', { class: 'atl-chip atl-chip--down' }, []);
-      warn.appendChild(bi('受限地区', 'restricted region'));
-      geo.appendChild(warn);
+      geo.appendChild(biSpan('受限地区', 'restricted', 'atl-chip atl-chip--down'));
+    }
+    // 机房 / 家宽 —— 这是风控权重差别最大的一个属性
+    if (card.kind && card.kind !== 'unknown') {
+      geo.appendChild(el('span', {
+        class: 'atl-chip' + (card.kind === 'datacenter' ? ' atl-chip--warn' : ''),
+        title: card.kind_evidence || ''
+      }, [card.kind_label || card.kind]));
+    }
+    if (card.proxy_flagged) {
+      geo.appendChild(biSpan('已知代理库', 'listed proxy', 'atl-chip atl-chip--down'));
     }
     body.push(geo);
 
     body.push(el('span', { class: 'surface-card__ip' }, [txt(card.egress_ip)]));
 
-    if (card.measured_on) {
-      body.push(el('span', { class: 'atl-muted', style: 'font-size:12px;' }, [
-        (lang() === 'en' ? 'measured on ' : '测于 ') + card.measured_on
-      ]));
+    // 城市 / 运营商：国家相同、地址不同的时候，这两行是唯一能把
+    // 两个出口区分开的人类可读信息。
+    var g = card.geo || {};
+    var who = [g.where, card.org || g.short_org, card.asn].filter(Boolean).join(' · ');
+    if (who) {
+      body.push(el('span', { class: 'atl-muted', style: 'font-size:12.5px;' }, [who]));
+    }
+    if (g.rdns) {
+      body.push(el('span', {
+        class: 'atl-mono atl-muted', style: 'font-size:11px; overflow-wrap:anywhere;'
+      }, [g.rdns]));
     }
 
-    var inner = el('div', { class: 'surface-card' }, body);
-    return el('div', { class: 'atl-card' }, [inner]);
+    // 一致性级别 —— 「国家相同」不等于「出口相同」，所以这里分五档而不是两档
+    if (card.level) {
+      var tone = LEVEL_TONE[card.level] || 'atl-chip';
+      var levelRow = el('div', { class: 'atl-row', style: 'flex-wrap:wrap;' }, [
+        el('span', { class: tone }, [card.level_label || card.level]),
+        el('span', { class: 'atl-muted', style: 'font-size:12px;' }, [
+          (card.domains || 0) + (lang() === 'en' ? ' domains' : ' 个域名') +
+          ' · ' + (card.addresses || []).length +
+          (lang() === 'en' ? ' address(es)' : ' 个出口地址')
+        ])
+      ]);
+      body.push(levelRow);
+    }
+
+    // 多于一个出口地址时，把每个地址和它覆盖的域名都列出来
+    if ((card.addresses || []).length > 1) {
+      var list = el('div', { class: 'exit-list', style: 'margin-top:6px;' }, []);
+      card.addresses.forEach(function (a) {
+        var ag = a.geo || {};
+        list.appendChild(el('div', { class: 'exit-row' }, [
+          el('span', { class: 'exit-row__ip' }, [a.ip]),
+          el('span', { class: 'atl-chip' }, [a.family]),
+          el('span', { class: 'exit-row__meta' }, [
+            [ag.where || a.country_label || a.country,
+             a.org || ag.short_org, a.asn, a.colo].filter(Boolean).join(' · ') +
+            ' — ' + a.host_count + (lang() === 'en' ? ' domains' : ' 个域名')
+          ])
+        ]));
+      });
+      body.push(list);
+    }
+
+    if (card.kind_meaning) {
+      body.push(el('span', {
+        class: 'atl-muted', style: 'font-size:12px; line-height:1.6;'
+      }, [card.kind_meaning]));
+    }
+
+    if (card.level_meaning) {
+      body.push(el('span', {
+        class: 'atl-muted', style: 'font-size:12px; line-height:1.6;'
+      }, [card.level_meaning]));
+    }
+
+    return el('div', { class: 'atl-card' }, [el('div', { class: 'surface-card' }, body)]);
   }
 
   function orbGlyph() {
@@ -562,6 +627,526 @@
     host.setAttribute('data-filled', '1');
   }
 
+  // ------------------------------------------------------ 渲染：诊断
+
+  function sevDot(severity, label) {
+    return el('span', { class: 'sev sev--' + severity }, [
+      el('span', { class: 'sev__dot' }, []),
+      el('span', { style: 'font-size:11px; font-weight:700; letter-spacing:0.08em;' },
+         [label || severity])
+    ]);
+  }
+
+  function renderFindings(state) {
+    var host = q('findings-list');
+    var badge = q('badge-findings');
+    var chips = q('sev-chips');
+    var rows = state.findings || [];
+    var sev = state.severity || {};
+
+    // 徽标只数需要动手的（必须处理 + 该修）。把"检查通过"也算进去，
+    // 徽标会永远是个大数字，读者就不再看它了。
+    var actionable = (sev.critical || 0) + (sev.warn || 0);
+    if (badge) badge.textContent = String(actionable);
+
+    if (chips) {
+      clear(chips);
+      [['critical', '必须处理', 'must fix'], ['warn', '该修', 'should fix'],
+       ['info', '知道即可', 'FYI'], ['ok', '通过', 'passing']
+      ].forEach(function (t) {
+        if (!sev[t[0]]) return;
+        chips.appendChild(el('span', { class: 'sev sev--' + t[0] }, [
+          el('span', { class: 'sev__dot' }, []),
+          el('span', { style: 'font-size:12px;' }, [
+            (lang() === 'en' ? t[2] : t[1]) + ' ' + sev[t[0]]
+          ])
+        ]));
+      });
+    }
+
+    if (!host || !rows.length) return;
+    clear(host);
+    rows.forEach(function (f) {
+      var grid = el('div', { class: 'finding__grid' }, [
+        el('span', { class: 'finding__key' }, [lang() === 'en' ? 'evidence' : '判据']),
+        el('span', { class: 'finding__val atl-mono', style: 'font-size:12px;' },
+           [f.evidence || DASH]),
+        el('span', { class: 'finding__key' }, [lang() === 'en' ? 'cause' : '成因']),
+        el('span', { class: 'finding__val' }, [f.cause || DASH]),
+        el('span', { class: 'finding__key' }, [lang() === 'en' ? 'next' : '下一步']),
+        el('span', { class: 'finding__val' }, [
+          el('span', { class: 'finding__fix' }, [f.fix || DASH])
+        ])
+      ]);
+      if (f.docs) {
+        grid.appendChild(el('span', { class: 'finding__key' }, ['docs']));
+        grid.appendChild(el('span', { class: 'finding__val atl-mono', style: 'font-size:12px;' },
+                             [f.docs]));
+      }
+      host.appendChild(el('div', { class: 'finding' }, [
+        el('div', { class: 'finding__head' }, [
+          sevDot(f.severity, f.severity_label),
+          el('span', { class: 'finding__title' }, [f.title])
+        ]),
+        grid
+      ]));
+    });
+  }
+
+  function renderChecks(state) {
+    var host = q('checks-list');
+    var rows = state.checks || [];
+    if (!host || !rows.length) return;
+    clear(host);
+    rows.forEach(function (c) {
+      host.appendChild(el('div', { class: 'finding', style: 'padding:var(--space-4) 0;' }, [
+        el('div', { class: 'finding__head' }, [
+          sevDot(c.severity, c.severity_label),
+          el('span', { style: 'font-size:14px; font-weight:700;' }, [c.label]),
+          el('span', { class: 'atl-mono atl-muted', style: 'font-size:11.5px; margin-left:auto;' },
+             [txt(c.value)])
+        ]),
+        el('p', { class: 'atl-muted', style: 'margin:8px 0 0; font-size:12.5px; line-height:1.66;' },
+           [c.detail || ''])
+      ]));
+    });
+  }
+
+  function renderStability(state) {
+    var body = q('stability-body');
+    var rows = state.stability || [];
+    if (!body || !rows.length) return;
+    clear(body);
+    rows.forEach(function (r) {
+      var verdict = r.country_changes
+        ? biSpan('跨国漂移', 'cross-country drift', 'atl-chip atl-chip--down')
+        : (r.network_changes
+            ? biSpan('换过网络', 'network changed', 'atl-chip atl-chip--warn')
+            : (r.ip_changes
+                ? biSpan('同网换址', 'address changed', 'atl-chip')
+                : biSpan('稳定', 'stable', 'atl-chip atl-chip--up')));
+      body.appendChild(el('tr', {}, [
+        el('td', { style: 'font-weight:700;' }, [r.path_label]),
+        el('td', { class: 'atl-table__num' }, [r.rounds]),
+        el('td', { class: 'atl-table__num' }, [r.ips.length]),
+        el('td', { class: 'atl-table__num' }, [r.networks.length]),
+        el('td', { class: 'atl-table__num' }, [r.ip_changes]),
+        el('td', { class: 'atl-table__num' }, [r.country_changes]),
+        el('td', {}, [verdict])
+      ]));
+    });
+  }
+
+  // ------------------------------------------------------ 图表：环图
+
+  // 三个强调色 + 一个中性。超过就并成"其余" —— 环图切片多于 4 片
+  // 就只能靠图例才读得懂，那说明它已经不工作了。
+  var SLICE_COLORS = ['var(--atl-rose)', 'var(--atl-coral)', 'var(--atl-amber)',
+                      'var(--atl-line-strong)'];
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function donut(items, unitZh, unitEn) {
+    var total = items.reduce(function (a, b) { return a + b.count; }, 0);
+    if (!total) return null;
+
+    var top = items.slice(0, 3);
+    var rest = items.slice(3);
+    if (rest.length) {
+      top = top.concat([{
+        key: lang() === 'en' ? 'rest' : '其余',
+        count: rest.reduce(function (a, b) { return a + b.count; }, 0)
+      }]);
+    }
+
+    var R = 46, C = 2 * Math.PI * R;
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 132 132');
+    svg.setAttribute('width', '132');
+    svg.setAttribute('height', '132');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label',
+      top.map(function (t) { return t.key + ' ' + t.count; }).join(', '));
+
+    var track = document.createElementNS(SVG_NS, 'circle');
+    track.setAttribute('cx', '66'); track.setAttribute('cy', '66');
+    track.setAttribute('r', String(R)); track.setAttribute('fill', 'none');
+    track.setAttribute('stroke', 'var(--atl-track)');
+    track.setAttribute('stroke-width', '15');
+    svg.appendChild(track);
+
+    var offset = 0;
+    top.forEach(function (item, i) {
+      var arc = C * (item.count / total);
+      var seg = document.createElementNS(SVG_NS, 'circle');
+      seg.setAttribute('cx', '66'); seg.setAttribute('cy', '66');
+      seg.setAttribute('r', String(R)); seg.setAttribute('fill', 'none');
+      seg.setAttribute('stroke', SLICE_COLORS[i]);
+      seg.setAttribute('stroke-width', '15');
+      seg.setAttribute('stroke-dasharray', arc.toFixed(2) + ' ' + (C - arc).toFixed(2));
+      seg.setAttribute('stroke-dashoffset', String(-offset.toFixed(2)));
+      seg.setAttribute('transform', 'rotate(-90 66 66)');
+      svg.appendChild(seg);
+      offset += arc;
+    });
+
+    var legend = el('div', { class: 'donut__legend' }, []);
+    top.forEach(function (item, i) {
+      legend.appendChild(el('div', { class: 'donut__row' }, [
+        el('span', { class: 'donut__swatch', style: 'background:' + SLICE_COLORS[i] }, []),
+        el('span', { class: 'donut__name' }, [item.label || item.key]),
+        el('span', { class: 'donut__num' }, [
+          Math.round(item.count * 100 / total) + '%'
+        ])
+      ]));
+    });
+
+    return el('div', { class: 'donut' }, [
+      el('div', { class: 'donut__figure' }, [
+        svg,
+        el('div', { class: 'donut__center' }, [
+          el('span', { class: 'donut__total' }, [total]),
+          el('span', { class: 'donut__unit' }, [lang() === 'en' ? unitEn : unitZh])
+        ])
+      ]),
+      legend
+    ]);
+  }
+
+  // ------------------------------------------------------ 历史看板
+
+  var pickedDays = [];
+  var rangeCache = null;
+
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function renderHistory(state) {
+    var hist = state.history || {};
+    var grid = q('day-grid');
+    var badge = q('badge-days');
+    var total = q('history-total');
+    var days = hist.days || [];
+
+    if (badge) badge.textContent = String(days.length);
+    if (total) {
+      total.textContent = days.length
+        ? days.length + (lang() === 'en' ? ' days · ' : ' 天 · ') + fmtBytes(hist.total_bytes)
+        : (lang() === 'en' ? 'no archive' : '暂无归档');
+    }
+    if (!grid || !days.length) return;
+
+    clear(grid);
+    days.forEach(function (d) {
+      var maxP50 = 1500;
+      var pct = d.p50 ? Math.max(3, Math.min(100, d.p50 / maxP50 * 100)) : 0;
+      var card = el('button', {
+        type: 'button',
+        class: 'day-card' + (pickedDays.indexOf(d.day) >= 0 ? ' is-picked' : ''),
+        'data-day': d.day,
+        'aria-pressed': pickedDays.indexOf(d.day) >= 0 ? 'true' : 'false'
+      }, [
+        el('span', { class: 'day-card__day' }, [d.day]),
+        el('span', { class: 'day-card__meta' }, [
+          d.rounds + (lang() === 'en' ? ' rounds · ' : ' 轮 · ') +
+          d.hours_covered + (lang() === 'en' ? 'h covered' : ' 小时覆盖')
+        ]),
+        el('span', { class: 'day-card__meta' }, [
+          (lang() === 'en' ? 'p50 ' : 'p50 ') + (d.p50 ? Math.round(d.p50) + ' ms' : DASH) +
+          ' · ' + fmtBytes(d.size_bytes)
+        ]),
+        el('span', { class: 'day-card__bar atl-meter' }, [
+          el('span', { class: 'atl-meter__fill', style: 'width:' + pct.toFixed(1) + '%' }, [])
+        ])
+      ]);
+      if (d.changes) {
+        card.appendChild(el('span', {
+          class: 'day-card__meta'
+        }, [(lang() === 'en' ? 'exit changes ' : '出口变更 ') + d.changes]));
+      }
+      grid.appendChild(card);
+    });
+    updateDaysHint();
+  }
+
+  function updateDaysHint() {
+    var hint = q('days-hint');
+    if (!hint) return;
+    clear(hint);
+    hint.appendChild(document.createTextNode(
+      pickedDays.length
+        ? (lang() === 'en' ? 'selected: ' : '已选 ') + pickedDays.length +
+          (lang() === 'en' ? ' day(s)' : ' 天')
+        : (lang() === 'en' ? 'click a day card to select' : '点日期卡选中')
+    ));
+  }
+
+  function renderRange(payload) {
+    rangeCache = payload;
+    var box = q('range-kpis');
+    var combined = (payload && payload.combined) || null;
+    if (box) box.hidden = !combined;
+    if (!combined) return;
+
+    var setNum = function (name, value) {
+      var node = q(name);
+      if (node) node.textContent = (value === null || value === undefined) ? DASH : String(value);
+    };
+    setNum('range-rounds', combined.rounds);
+    setNum('range-changes', combined.changes);
+    setNum('range-cc', combined.country_changes);
+
+    var cd = q('country-donut');
+    if (cd) {
+      var chart = donut((combined.countries || []).map(function (c) {
+        return { key: c.key, label: c.key, count: c.count };
+      }), '次观测', 'readings');
+      if (chart) { clear(cd); cd.appendChild(chart); }
+    }
+
+    var nd = q('network-donut');
+    if (nd) {
+      var chart2 = donut((combined.networks || []).map(function (n) {
+        return { key: n.key, label: (n.org || n.key), count: n.count };
+      }), '次观测', 'readings');
+      if (chart2) { clear(nd); nd.appendChild(chart2); }
+    }
+
+    var body = q('addresses-body');
+    if (body && (combined.addresses || []).length) {
+      clear(body);
+      combined.addresses.forEach(function (a) {
+        body.appendChild(el('tr', {}, [
+          el('td', {}, [el('span', { class: 'wrap-mono' }, [a.ip])]),
+          el('td', {}, [el('span', { class: 'atl-chip' }, [a.family || DASH])]),
+          el('td', {}, [[a.city, a.cc].filter(Boolean).join(' · ') || DASH]),
+          el('td', {}, [[a.org, a.asn].filter(Boolean).join(' · ') || DASH]),
+          el('td', {}, [
+            el('span', { class: 'atl-row' }, [
+              el('span', { class: 'atl-meter', style: 'flex:1;' }, [
+                el('span', { class: 'atl-meter__fill', style: 'width:' + a.share + '%' }, [])
+              ]),
+              el('span', { class: 'atl-mono', style: 'font-size:12px;' }, [a.share + '%'])
+            ])
+          ])
+        ]));
+      });
+    }
+
+    // 小时分布：多天叠加会把"哪天出的事"抹掉，所以只画一天。
+    // 取**轮数最多**的那天而不是列表里的第一天 —— 第一天常常是今天，
+    // 而今天可能才刚开始采，一根柱子看不出任何分布。
+    var day = (payload.days || []).slice().sort(function (a, b) {
+      return (b.rounds || 0) - (a.rounds || 0);
+    })[0];
+    var chartHost = q('hour-chart');
+    var dayLabel = q('hourly-day');
+    if (chartHost && day) {
+      if (dayLabel) dayLabel.textContent = day.day;
+      var maxP50 = Math.max.apply(null,
+        (day.hourly || []).map(function (h) { return h.p50 || 0; }).concat([1]));
+      clear(chartHost);
+      (day.hourly || []).forEach(function (h) {
+        var pct = h.p50 ? Math.max(4, h.p50 / maxP50 * 100) : 0;
+        chartHost.appendChild(el('div', { class: 'hour-chart__col' }, [
+          el('span', {
+            class: 'hour-chart__fill' + (h.rounds ? '' : ' hour-chart__fill--empty'),
+            style: 'height:' + (h.rounds ? pct.toFixed(1) : 4) + '%',
+            title: h.hour + ':00 · ' + (h.rounds || 0) +
+                   (lang() === 'en' ? ' rounds' : ' 轮') +
+                   (h.p50 ? ' · p50 ' + Math.round(h.p50) + ' ms' : '')
+          }, [])
+        ]));
+      });
+    }
+  }
+
+  function loadRange() {
+    if (!pickedDays.length) { renderRange(null); return Promise.resolve(); }
+    var qs = pickedDays.map(function (d) { return 'day=' + encodeURIComponent(d); }).join('&');
+    return fetch('/api/day?' + qs, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(renderRange)
+      .catch(function (err) { window.console.warn('[cem] /api/day 失败', err); });
+  }
+
+  function wireHistory() {
+    var grid = q('day-grid');
+    if (grid) {
+      grid.addEventListener('click', function (evt) {
+        var node = evt.target;
+        while (node && node !== grid && !node.hasAttribute('data-day')) node = node.parentNode;
+        if (!node || node === grid) return;
+        var day = node.getAttribute('data-day');
+        var at = pickedDays.indexOf(day);
+        pickedDays = at >= 0
+          ? pickedDays.filter(function (d) { return d !== day; })
+          : pickedDays.concat([day]).sort();
+        node.classList.toggle('is-picked', at < 0);
+        node.setAttribute('aria-pressed', at < 0 ? 'true' : 'false');
+        updateDaysHint();
+        loadRange();
+      });
+    }
+
+    var all = q('days-all');
+    if (all) {
+      all.addEventListener('click', function () {
+        pickedDays = ((lastState && lastState.history && lastState.history.days) || [])
+          .map(function (d) { return d.day; });
+        render(lastState);
+        loadRange();
+      });
+    }
+    var none = q('days-none');
+    if (none) {
+      none.addEventListener('click', function () {
+        pickedDays = [];
+        render(lastState);
+        renderRange(null);
+      });
+    }
+    var del = q('days-delete');
+    if (del) {
+      del.addEventListener('click', function () {
+        if (!pickedDays.length) return;
+        // 删除不可撤销，问一次。问的内容要写清删什么、删多少。
+        var msg = lang() === 'en'
+          ? 'Delete archived data for ' + pickedDays.length + ' day(s)?\n' +
+            pickedDays.join(', ') + '\nThis cannot be undone.'
+          : '删除这 ' + pickedDays.length + ' 天的归档数据？\n' +
+            pickedDays.join('、') + '\n删掉之后无法恢复。';
+        if (!window.confirm(msg)) return;
+        post('/api/days/delete', { days: pickedDays })
+          .then(function () {
+            pickedDays = [];
+            renderRange(null);
+            return refresh();
+          })
+          .catch(function (err) { window.alert('删除失败：' + err.message); });
+      });
+    }
+  }
+
+  // ------------------------------------------------------ 遥测字段
+
+  function renderTelemetryFields(data) {
+    var host = q('telemetry-body');
+    if (!host) return;
+    clear(host);
+    if (!data || !data.ok) {
+      host.appendChild(el('p', { class: 'atl-muted', style: 'font-size:13px;' },
+        [(data && data.error) || (lang() === 'en' ? 'extraction failed' : '提取失败')]));
+      return;
+    }
+
+    var kv = function (k, v) {
+      return el('div', { class: 'finding__grid', style: 'margin-top:0;' }, [
+        el('span', { class: 'finding__key' }, [k]),
+        el('span', { class: 'finding__val atl-mono', style: 'font-size:12px;' }, [v || DASH])
+      ]);
+    };
+
+    host.appendChild(el('div', { class: 'atl-row', style: 'margin-bottom:var(--space-4);' }, [
+      el('span', { class: 'atl-chip atl-chip--accent' }, [data.version || DASH])
+    ]));
+    host.appendChild(kv(lang() === 'en' ? 'intake' : '接入点', data.intake_url));
+    host.appendChild(kv(lang() === 'en' ? 'token' : '凭据', data.client_token_prefix));
+    host.appendChild(kv(lang() === 'en' ? 'batching' : '攒批',
+      (data.flush_interval_ms ? data.flush_interval_ms + ' ms' : DASH) + ' · ' +
+      (data.batch_limit ? data.batch_limit + (lang() === 'en' ? ' max' : ' 条上限') : DASH)));
+
+    var section = function (titleZh, titleEn) {
+      host.appendChild(el('h3', {
+        class: 'atl-navgroup__label', style: 'margin:var(--space-5) 0 var(--space-3);'
+      }, [lang() === 'en' ? titleEn : titleZh]));
+    };
+
+    if ((data.envelope || []).length) {
+      section('信封字段', 'Envelope');
+      var table = el('div', { class: 'exit-list' }, []);
+      data.envelope.forEach(function (e) {
+        table.appendChild(el('div', { class: 'exit-row' }, [
+          el('span', { class: 'exit-row__ip' }, [e.key]),
+          el('span', { class: 'atl-muted', style: 'font-size:12px;' }, [e.value])
+        ]));
+      });
+      host.appendChild(table);
+    }
+
+    if ((data.payload_fields || []).length) {
+      section('业务字段', 'Payload fields');
+      var chips = el('div', { class: 'inv-card__tags' }, []);
+      data.payload_fields.forEach(function (f) {
+        chips.appendChild(el('span', { class: 'atl-chip' }, [f]));
+      });
+      host.appendChild(chips);
+    }
+
+    if ((data.behaviours || []).length) {
+      section('代码里能读出来的行为', 'Behaviour visible in code');
+      var list = el('div', { class: 'exit-list' }, []);
+      data.behaviours.forEach(function (b) {
+        list.appendChild(el('div', { class: 'exit-row' }, [
+          el('span', { class: 'exit-row__ip' }, [b.name]),
+          el('span', {}, []),
+          el('span', { class: 'exit-row__meta' }, [b.meaning])
+        ]));
+      });
+      host.appendChild(list);
+    }
+
+    if ((data.event_names || []).length) {
+      section('事件名白名单（' + data.event_names.length + '）',
+              'Event allowlist (' + data.event_names.length + ')');
+      var ev = el('div', { class: 'inv-card__tags' }, []);
+      data.event_names.slice(0, 60).forEach(function (n) {
+        ev.appendChild(el('span', { class: 'atl-chip' }, [n]));
+      });
+      host.appendChild(ev);
+      if (data.event_names.length > 60) {
+        host.appendChild(el('p', { class: 'atl-muted', style: 'font-size:12px; margin-top:8px;' },
+          [(lang() === 'en' ? 'and ' : '还有 ') + (data.event_names.length - 60) +
+           (lang() === 'en' ? ' more — see `cem telemetry --all-events`'
+                            : ' 个，跑 `cem telemetry --all-events` 全看')]));
+      }
+    }
+
+    if ((data.env_vars || []).length) {
+      section('相关环境变量', 'Related env vars');
+      var envs = el('div', { class: 'inv-card__tags' }, []);
+      data.env_vars.forEach(function (n) {
+        envs.appendChild(el('span', { class: 'atl-chip atl-chip--accent' }, [n]));
+      });
+      host.appendChild(envs);
+    }
+  }
+
+  function wireTelemetry() {
+    var btn = q('telemetry-load');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      btn.setAttribute('disabled', 'disabled');
+      var host = q('telemetry-body');
+      if (host) {
+        clear(host);
+        host.appendChild(el('p', { class: 'atl-muted', style: 'font-size:13px;' },
+          [lang() === 'en' ? 'scanning the executable…' : '正在扫描可执行文件……']));
+      }
+      fetch('/api/telemetry', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(renderTelemetryFields)
+        .catch(function (err) {
+          window.console.warn('[cem] /api/telemetry 失败', err);
+          renderTelemetryFields(null);
+        })
+        .then(function () { btn.removeAttribute('disabled'); });
+    });
+  }
+
   // ------------------------------------------------------------ 渲染：状态
 
   function renderStatus(state) {
@@ -688,7 +1273,9 @@
      ['telemetry', renderTelemetry], ['paths', renderPaths],
      ['changes', renderChanges], ['domains', renderDomains],
      ['connections', renderConnections], ['dns', renderDns],
-     ['latency', renderLatency], ['inventory', renderInventory]
+     ['latency', renderLatency], ['inventory', renderInventory],
+     ['findings', renderFindings], ['checks', renderChecks],
+     ['stability', renderStability], ['history', renderHistory]
     ].forEach(function (pair) { safely(pair[0], pair[1], state); });
   }
 
@@ -796,6 +1383,8 @@
     wireSwitch();
     wireInterval();
     wireSampleNow();
+    wireHistory();
+    wireTelemetry();
     wireLangReflow();
     refresh().then(connectStream);
   }

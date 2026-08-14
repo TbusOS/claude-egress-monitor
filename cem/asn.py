@@ -26,6 +26,8 @@ from .model import AsnInfo
 from .net import timed_get
 from .resolve import is_fake_ip, is_private
 
+__doc_note__ = "AsnInfo 定义在 model.py，这里只负责查询与缓存。"
+
 CACHE_TTL_S = 7 * 24 * 3600
 
 # "399358 | 160.79.104.0/23 | US | arin | 2023-09-14"
@@ -120,9 +122,35 @@ def parse_ipinfo(payload: str, ip: str) -> Optional[AsnInfo]:
         country=data.get("country"),
         org=org or None,
         city=data.get("city"),
+        region=data.get("region"),
+        timezone=data.get("timezone"),
+        loc=data.get("loc"),
         anycast=bool(data["anycast"]) if "anycast" in data else None,
         source="ipinfo",
     )
+
+
+def lookup_rdns(ip: str, timeout: int = 4) -> Optional[str]:
+    """反向解析。
+
+    为什么值得单独查：出口 IP 的 rDNS 经常直接写着机房或线路的名字
+    （`...contabo.net`、`...hinet.net`、`...amazonaws.com`），
+    这比 ASN 的组织名更能说明「这是一台什么样的机器」。
+    住宅宽带的 rDNS 通常带着地区代码和拨号编号，机房的则是规整的域名 ——
+    两者一眼能分开，而这正是风控最在意的区别。
+    """
+    try:
+        proc = subprocess.run(
+            ["dig", "+short", f"+time={timeout}", "+tries=1", "-x", ip],
+            capture_output=True, text=True, timeout=timeout + 3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in proc.stdout.splitlines():
+        name = line.strip().rstrip(".")
+        if name:
+            return name
+    return None
 
 
 def lookup_ipinfo(ip: str, *, proxy: Optional[tuple[str, int]] = None) -> Optional[AsnInfo]:
@@ -130,6 +158,49 @@ def lookup_ipinfo(ip: str, *, proxy: Optional[tuple[str, int]] = None) -> Option
     if not res.ok:
         return None
     return parse_ipinfo(res.body, ip)
+
+
+def parse_ipapi(payload: str, ip: str) -> Optional[AsnInfo]:
+    try:
+        data = json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or data.get("status") != "success":
+        return None
+    asn_field = str(data.get("as") or "")
+    asn = asn_field.split(" ", 1)[0] if asn_field.startswith("AS") else None
+    return AsnInfo(
+        ip=ip,
+        asn=asn,
+        country=data.get("countryCode"),
+        org=data.get("isp") or data.get("org") or None,
+        city=data.get("city"),
+        region=data.get("regionName"),
+        timezone=data.get("timezone"),
+        rdns=data.get("reverse") or None,
+        hosting=(bool(data["hosting"]) if "hosting" in data else None),
+        mobile=(bool(data["mobile"]) if "mobile" in data else None),
+        proxy_flag=(bool(data["proxy"]) if "proxy" in data else None),
+        source="ip-api",
+    )
+
+
+def lookup_ipapi(ip: str, *, proxy: Optional[tuple[str, int]] = None) -> Optional[AsnInfo]:
+    """第二个地理数据源。
+
+    存在的理由：ipinfo 免费额度会限流，一限流就整片地址查不到城市，
+    界面上表现为"有的出口有城市、有的没有"，读者会以为是数据本身缺失。
+    两个源互为兜底之后，缺城市才真的意味着数据源不知道。
+    """
+    # hosting / mobile / proxy 这三个分类标志是免费额度里就给的，
+    # 也是"机房还是家宽"唯一可靠的数据源判据 —— 一定要请求它们。
+    url = ("http://ip-api.com/json/" + ip +
+           "?fields=status,countryCode,regionName,city,timezone,isp,org,as,"
+           "reverse,hosting,mobile,proxy")
+    res = timed_get(url, proxy=proxy, timeout=6.0)
+    if not res.ok:
+        return None
+    return parse_ipapi(res.body, ip)
 
 
 def _merge(base: Optional[AsnInfo], extra: Optional[AsnInfo]) -> Optional[AsnInfo]:
@@ -145,6 +216,14 @@ def _merge(base: Optional[AsnInfo], extra: Optional[AsnInfo]) -> Optional[AsnInf
         country=base.country or extra.country,
         org=base.org or extra.org,
         city=base.city or extra.city,
+        region=base.region or extra.region,
+        hosting=base.hosting if base.hosting is not None else extra.hosting,
+        mobile=base.mobile if base.mobile is not None else extra.mobile,
+        proxy_flag=(base.proxy_flag if base.proxy_flag is not None
+                    else extra.proxy_flag),
+        timezone=base.timezone or extra.timezone,
+        loc=base.loc or extra.loc,
+        rdns=base.rdns or extra.rdns,
         anycast=base.anycast if base.anycast is not None else extra.anycast,
         source="+".join(filter(None, [base.source, extra.source])),
     )
@@ -195,14 +274,27 @@ class AsnCache:
 
         with self._lock:
             hit = self._mem.get(ip)
-        if hit:
+        # 命中缓存但缺城市时不直接返回：那多半是上次查的时候地理数据源
+        # 限流了，而不是"这个地址真的没有城市"。缓存一个残缺结果会让
+        # 界面永远显示不出城市，且没人知道为什么。
+        if hit and not (self._want_city and hit.city is None):
             return hit
 
-        info = lookup_cymru(ip)
+        info = hit or lookup_cymru(ip)
+        # ip-api 放在前面：免费额度就给 hosting / mobile / proxy 这三个
+        # 分类标志，而 ipinfo 免费版没有。ipinfo 用来补 anycast 和更准的城市。
+        if self._want_city and (info is None or info.city is None
+                                or info.hosting is None):
+            info = _merge(info, lookup_ipapi(ip, proxy=proxy))
         if self._want_city and (info is None or info.city is None):
             info = _merge(info, lookup_ipinfo(ip, proxy=proxy))
         if info is None:
             return None
+        # rDNS 单独补。它和 ASN 是两个不同的信息源：ASN 说"这是谁的网络"，
+        # rDNS 说"这台机器叫什么"，后者常常直接暴露机房名。
+        rdns = lookup_rdns(ip)
+        if rdns:
+            info = _merge(info, AsnInfo(ip=ip, rdns=rdns, source="rdns"))
 
         with self._lock:
             self._mem = {**self._mem, ip: info}

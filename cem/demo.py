@@ -54,12 +54,18 @@ def _traces(jitter: float = 1.0) -> tuple[TraceView, ...]:
     out: list[TraceView] = []
     for host, base in _CORE:
         total = round(base * jitter, 1)
-        # cli 出新加坡，desktop 出日本 —— 1.1.1.1 两边都出日本，
-        # 于是 cli 这条路径内部也不一致，两类结论都能演示到。
-        cli_cc, cli_colo, cli_ip = (
-            ("JP", "NRT", _DESKTOP_IP) if host == "1.1.1.1"
-            else ("SG", "SIN", _CLI_IP)
-        )
+        # cli 出新加坡，desktop 出日本。另外让 www.anthropic.com 在 cli
+        # 路径下落到日本 —— 演示"有 Claude 域名没被分流规则覆盖"这一类结论。
+        #
+        # 这里必须用**真实的 Claude 域名**制造这个分歧：结论计算会把对照组
+        # （1.1.1.1）排除掉，拿对照组制造的分歧根本不会被算进去，
+        # 那样演示数据就在广告一个它自己产不出的结论。
+        if host == "1.1.1.1":
+            cli_cc, cli_colo, cli_ip = "JP", "NRT", _DESKTOP_IP
+        elif host == "www.anthropic.com":
+            cli_cc, cli_colo, cli_ip = "JP", "NRT", _DESKTOP_IP
+        else:
+            cli_cc, cli_colo, cli_ip = "SG", "SIN", _CLI_IP
         out.append(TraceView(
             target=host, path="cli", ok=True, egress_ip=cli_ip,
             country=cli_cc, colo=cli_colo, http="http/2", tls="TLSv1.3",
@@ -148,12 +154,14 @@ def sample(seq: int = 1, jitter: float = 1.0) -> Sample:
     """
     notes = (
         DEMO_NOTICE,
-        "7 个域名的出口国家在不同入口之间不一致（cli → SG，desktop → JP）："
-        "api.anthropic.com、claude.ai、code.claude.com、platform.claude.com "
-        "等 7 个域名。同一台机器上两个入口读的是两份不同的代理配置，"
+        "6 个域名的出口国家在不同入口之间不一致（cli → SG，desktop → JP）："
+        "a-api.anthropic.com、api.anthropic.com、claude.ai、code.claude.com "
+        "等 6 个域名。同一台机器上两个入口读的是两份不同的代理配置，"
         "分流结果因此不同。",
-        "cli 这条路径下，多个 Claude 域名的出口国家不一致（JP、SG）—— "
-        "分流规则按域名逐条命中，有域名没被规则覆盖到。",
+        "cli 这条路径下，Claude 的域名落在了 2 个不同国家：JP 有 1 个"
+        "（www.anthropic.com）；SG 有 6 个（a-api.anthropic.com、"
+        "api.anthropic.com、claude.ai）。分流规则按域名逐条命中，"
+        "说明有域名没被规则覆盖到、落到了兜底出口。",
         "有 1 条连接是发给本机代理的，lsof 只能看到「它连了代理」，"
         "真实目的地拿不到。要补上这一段，需要打开分流器的控制接口"
         "（见 docs/03-routing.md）。",

@@ -195,7 +195,10 @@ def build_connections(
         ip, port = row["remote_ip"], row["remote_port"]
         kind = classify_remote(ip, port, proxy)
         host = fake_map.get(ip)
-        endpoint = endpoint_lookup(host) if (host and endpoint_lookup) else None
+        # 一个 anycast 地址可能对应多个域名，反查表里用 `、` 连接。
+        # 归类时取第一个 —— 同一个地址上的域名都属于同一家、通常也同一类。
+        first_host = host.split("、")[0] if host else None
+        endpoint = endpoint_lookup(first_host) if (first_host and endpoint_lookup) else None
         asn: Optional[AsnInfo] = None
         if kind == KIND_REAL and asn_lookup:
             asn = asn_lookup(ip)

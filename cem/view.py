@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from . import diagnose as dx
 from . import endpoints as ep
 from . import paths as pathmod
 from . import probe
@@ -84,16 +85,63 @@ def endpoint_payload() -> list[dict]:
     ]
 
 
+def _asn_payload(info) -> Optional[dict]:
+    if info is None:
+        return None
+    return {
+        "asn": info.asn, "org": info.org, "short_org": info.short_org,
+        "country": info.country, "country_label": country_label(info.country),
+        "city": info.city, "region": info.region, "where": info.where,
+        "timezone": info.timezone, "rdns": info.rdns, "prefix": info.prefix,
+        "anycast": info.anycast, "source": info.source,
+    }
+
+
+def _address_payload(a: dx.ExitAddress, asn_by_ip: dict) -> dict:
+    info = asn_by_ip.get(a.ip)
+    return {
+        "ip": a.ip,
+        "family": a.family,
+        "country": a.country,
+        "country_label": country_label(a.country),
+        "colo": a.colo,
+        "asn": a.asn,
+        "org": a.org,
+        "hosts": list(a.hosts),
+        "host_count": len(a.hosts),
+        "city": a.city,
+        "kind": a.kind,
+        "kind_label": dx.KIND_LABEL.get(a.kind, a.kind),
+        "kind_evidence": a.kind_evidence,
+        "proxy_flagged": a.proxy_flagged,
+        "restricted": bool(a.country and a.country.upper() in RESTRICTED_CC),
+        "geo": _asn_payload(info),
+    }
+
+
 def surface_cards(sample: Optional[Sample],
                   routes: tuple[pathmod.Path, ...]) -> list[dict]:
-    """三个入口各一张卡：出口 IP、国家、边缘机房、是否受限地区。"""
-    by_path = probe.egress_by_surface(sample) if sample else {}
+    """三个入口各一张卡。
+
+    比早先多给三样东西，都是"国家相同但地址不同"时唯一能区分出口的信息：
+    **归属网络（ASN + 运营商）**、**城市**、以及这条路径的**一致性级别**
+    （单一出口 / 同节点双栈 / 同网多址 / 跨网 / 跨国）。
+    """
+    profiles = dx.egress_profile(sample) if sample else {}
+    asn_by_ip = {}
+    if sample:
+        for t in sample.traces:
+            if t.egress_ip and t.egress_asn:
+                asn_by_ip[t.egress_ip] = t.egress_asn
+
     cards: list[dict] = []
     for surface in (pathmod.SURFACE_CLI, pathmod.SURFACE_DESKTOP,
                     pathmod.SURFACE_WEB):
         route = pathmod.path_for_surface(routes, surface)
-        got = by_path.get(route.id) if route else None
-        cc = (got or {}).get("country")
+        prof = profiles.get(route.id) if route else None
+        primary = prof.primary if prof else None
+        info = asn_by_ip.get(primary.ip) if primary else None
+        cc = primary.country if primary else None
         cards.append({
             "surface": surface,
             "label": pathmod.SURFACE_LABELS[surface],
@@ -102,12 +150,30 @@ def surface_cards(sample: Optional[Sample],
             "proxy": (f"{route.proxy[0]}:{route.proxy[1]}"
                       if route and route.proxy else None),
             "route_detail": route.detail if route else None,
-            "egress_ip": (got or {}).get("egress_ip"),
+            "egress_ip": primary.ip if primary else None,
+            "family": primary.family if primary else None,
             "country": cc,
             "country_label": country_label(cc),
-            "colo": (got or {}).get("colo"),
-            "measured_on": (got or {}).get("target"),
-            "restricted": bool(cc and cc.upper() in RESTRICTED_CC),
+            "colo": primary.colo if primary else None,
+            "asn": primary.asn if primary else None,
+            "org": primary.org if primary else None,
+            "geo": _asn_payload(info),
+            "measured_on": (prof.primary.hosts[0] if prof and prof.primary
+                            and prof.primary.hosts else None),
+            "domains": prof.domains if prof else 0,
+            "level": prof.level if prof else None,
+            "level_label": dx.LEVEL_LABEL.get(prof.level) if prof else None,
+            "level_meaning": dx.LEVEL_MEANING.get(prof.level) if prof else None,
+            "kind": primary.kind if primary else None,
+            "kind_label": (dx.KIND_LABEL.get(primary.kind) if primary else None),
+            "kind_meaning": (dx.KIND_MEANING.get(primary.kind) if primary else None),
+            "kind_evidence": primary.kind_evidence if primary else None,
+            "proxy_flagged": bool(primary and primary.proxy_flagged),
+            "city": primary.city if primary else None,
+            "addresses": ([_address_payload(a, asn_by_ip) for a in prof.addresses]
+                          if prof else []),
+            "countries": list(prof.countries) if prof else [],
+            "restricted": bool(prof and prof.restricted),
         })
     return cards
 
@@ -129,7 +195,13 @@ def trace_rows(sample: Optional[Sample]) -> list[dict]:
             "http": t.http,
             "tls": t.tls,
             "peer_ip": t.peer_ip,
+            "peer_asn": _asn_payload(t.peer_asn),
+            "egress_asn": _asn_payload(t.egress_asn),
+            "family": t.family,
             "ipv6": t.is_ipv6,
+            "tun_shortcut": t.tun_shortcut,
+            "clock_skew_s": t.clock_skew_s,
+            "cert": t.tls_info,
             "category": endpoint.category if endpoint else None,
             "category_label": (CATEGORY_LABELS.get(endpoint.category)
                                if endpoint else None),
@@ -210,6 +282,94 @@ def connection_rows(sample: Optional[Sample]) -> list[dict]:
     return rows
 
 
+SEVERITY_LABEL = {
+    dx.SEV_CRITICAL: "必须处理",
+    dx.SEV_WARN: "该修",
+    dx.SEV_INFO: "知道即可",
+    dx.SEV_OK: "检查通过",
+}
+
+
+def check_rows(sample: Optional[Sample]) -> list[dict]:
+    if not sample:
+        return []
+    return [
+        {
+            "id": c.id, "label": c.label, "ok": c.ok, "value": c.value,
+            "detail": c.detail, "severity": c.severity,
+            "severity_label": SEVERITY_LABEL.get(c.severity, c.severity),
+        }
+        for c in sample.checks
+    ]
+
+
+def finding_rows(sample: Optional[Sample],
+                 samples: tuple[Sample, ...] = ()) -> list[dict]:
+    """诊断条目。每条都带判据、成因、可执行的下一步。"""
+    return [
+        {
+            "id": f.id, "severity": f.severity,
+            "severity_label": SEVERITY_LABEL.get(f.severity, f.severity),
+            "title": f.title, "evidence": f.evidence,
+            "cause": f.cause, "fix": f.fix, "docs": f.docs,
+        }
+        for f in dx.diagnose(sample, samples)
+    ]
+
+
+def stability_rows(samples: tuple[Sample, ...],
+                   routes: tuple[pathmod.Path, ...]) -> list[dict]:
+    out = []
+    for route in routes:
+        st = dx.stability(samples, route.id)
+        if not st.rounds:
+            continue
+        out.append({
+            "path": route.id, "path_label": route.label,
+            "rounds": st.rounds,
+            "ips": list(st.ips), "networks": list(st.networks),
+            "countries": [country_label(c) or c for c in st.countries],
+            "country_codes": list(st.countries),
+            "ip_changes": st.ip_changes,
+            "network_changes": st.network_changes,
+            "country_changes": st.country_changes,
+            "stable": st.stable,
+            "drift_rate": st.drift_rate,
+        })
+    return out
+
+
+def telemetry_payload() -> dict:
+    """遥测字段的静态提取结果。见 cem/telemetry.py 的边界说明。"""
+    from . import telemetry as tele
+    return tele.to_json(tele.inspect())
+
+
+def day_payload(store) -> dict:
+    """历史看板的目录：有哪些天、各占多大。"""
+    if store is None or not store.enabled:
+        return {"enabled": False, "days": [], "total_bytes": 0}
+    days = []
+    total = 0
+    for day in store.days():
+        summary = store.summary(day) or {}
+        size = summary.get("size_bytes", 0)
+        total += size
+        days.append({
+            "day": day,
+            "rounds": summary.get("rounds", 0),
+            "size_bytes": size,
+            "hours_covered": summary.get("hours_covered", 0),
+            "changes": summary.get("changes", 0),
+            "country_changes": summary.get("country_changes", 0),
+            "countries": summary.get("countries", [])[:4],
+            "p50": (summary.get("latency") or {}).get("p50"),
+            "severity": summary.get("severity", {}),
+        })
+    return {"enabled": True, "days": days, "total_bytes": total,
+            "root": str(store.root) if store.root else None}
+
+
 def latency_panel(history: History,
                   routes: tuple[pathmod.Path, ...],
                   *,
@@ -258,7 +418,7 @@ def change_log(history: History, routes: tuple[pathmod.Path, ...],
     return out[:40]
 
 
-def snapshot(history: History, sampler) -> dict:
+def snapshot(history: History, sampler, day_store=None) -> dict:
     """UI 一次拉取要的全部内容。"""
     sample = history.latest()
     routes = sampler.routes
@@ -274,7 +434,13 @@ def snapshot(history: History, sampler) -> dict:
         "latency": latency_panel(history, routes),
         "changes": change_log(history, routes),
         "notes": list(sample.notes) if sample else [],
+        "checks": check_rows(sample),
+        "findings": finding_rows(sample, history.recent(240)),
+        "stability": stability_rows(history.recent(240), routes),
+        "severity": dx.summary(dx.diagnose(sample, history.recent(240)))
+                    if sample else {},
         "endpoints": endpoint_payload(),
+        "history": day_payload(day_store),
         "meta": {
             "cli_sampled": ep.CLI_VERSION_SAMPLED,
             "desktop_sampled": ep.DESKTOP_SAMPLED,
@@ -284,6 +450,12 @@ def snapshot(history: History, sampler) -> dict:
 
 __all__ = [
     "CATEGORY_LABELS",
+    "SEVERITY_LABEL",
+    "check_rows",
+    "day_payload",
+    "telemetry_payload",
+    "finding_rows",
+    "stability_rows",
     "COUNTRY_ZH",
     "RESTRICTED_CC",
     "change_log",

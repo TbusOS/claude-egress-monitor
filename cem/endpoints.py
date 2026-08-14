@@ -43,6 +43,11 @@ class Endpoint:
     probe: str = "tcp"
     optional: bool = False        # 只在特定配置下才会出现
     note: Optional[str] = None
+    # 对照组：**不属于 Claude**，只用来做出口/延迟的参照。
+    # 所有"结论"类计算都必须把它排除掉 —— 否则对照组走默认路由这件
+    # 完全正常的事，会被算成"你的 Claude 域名分流有问题"，
+    # 而读者会照着这条假警报去改一份本来没问题的规则。
+    baseline: bool = False
 
 
 # ---------------------------------------------------------------- 主干
@@ -199,6 +204,7 @@ BASELINES: tuple[Endpoint, ...] = (
                 "只可能是你本地的分流规则造成的。",
         evidence=("docs",),
         probe="cf-trace",
+        baseline=True,
     ),
 )
 
@@ -222,6 +228,26 @@ def trace_capable(include_optional: bool = False) -> tuple[Endpoint, ...]:
 def classify_host(host: str) -> Optional[Endpoint]:
     """把观测到的域名归到清单里。未知域名返回 None，不猜。"""
     return BY_HOST.get(host)
+
+
+def is_baseline(host: str) -> bool:
+    e = BY_HOST.get(host)
+    return bool(e and e.baseline)
+
+
+# 「Claude 的业务出口」到底看哪些域名：主干 + 登录 + 官网，排除对照组、
+# 排除遥测（遥测走哪儿是另一个问题，不该混进业务出口的结论里）。
+CLAUDE_EGRESS_CATEGORIES = (CAT_API, CAT_AUTH, CAT_CONTENT, CAT_CONTROL)
+
+
+def claude_egress_hosts(include_optional: bool = False) -> tuple[str, ...]:
+    return tuple(
+        e.host for e in ENDPOINTS
+        if not e.baseline
+        and e.probe == "cf-trace"
+        and e.category in CLAUDE_EGRESS_CATEGORIES
+        and (include_optional or not e.optional)
+    )
 
 
 __all__ = [

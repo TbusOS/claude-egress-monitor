@@ -35,7 +35,9 @@ class TestDisagreements(unittest.TestCase):
         读者会开始跳过整块内容 —— 而这块正是唯一需要动手的地方。
         """
         traces = []
-        for host in ("a.example", "b.example", "c.example"):
+        # 必须用**真实的** Claude 域名：结论计算只认清单里的域名，
+        # 对照组和清单外的域名会被过滤掉 —— 这正是修掉假警报的那条规则。
+        for host in ("api.anthropic.com", "claude.ai", "code.claude.com"):
             traces.append(trace(host, "cli", "203.0.113.1", "SG"))
             traces.append(trace(host, "desktop", "198.51.100.1", "JP"))
         notes = probe.disagreements(Sample(ts=0, seq=1, traces=tuple(traces)))

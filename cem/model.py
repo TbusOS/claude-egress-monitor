@@ -38,6 +38,123 @@ class Timing:
 
 
 @dataclass(frozen=True)
+class AsnInfo:
+    """一个 IP 的归属。source 记清是哪儿查来的，便于判断可信度。"""
+
+    ip: str
+    asn: Optional[str] = None
+    prefix: Optional[str] = None
+    country: Optional[str] = None
+    org: Optional[str] = None
+    city: Optional[str] = None
+    region: Optional[str] = None       # 省 / 州
+    timezone: Optional[str] = None     # 该地址所在时区，可与本机时区对照
+    loc: Optional[str] = None          # "纬度,经度"
+    rdns: Optional[str] = None         # 反向解析，常能看出机房归属
+    anycast: Optional[bool] = None
+    # 三个分类标志，来自 ip-api 免费接口。它们是业界通用判据，
+    # 但**都不是 100% 准的**，所以 kind_evidence 会说明结论从哪来。
+    hosting: Optional[bool] = None     # 机房 / 云主机
+    mobile: Optional[bool] = None      # 移动蜂窝网络
+    proxy_flag: Optional[bool] = None  # 已知代理 / VPN 出口
+    source: Optional[str] = None
+
+    # ── 出口类型：机房还是家宽 ──────────────────────────────────
+    # 为什么值得单独判：风控对**机房 IP** 明显更敏感（绝大多数爬虫和批量
+    # 注册来自机房），住宅宽带被视为更"干净"。同一个国家里，一个机房出口
+    # 和一个家宽出口的风险完全不是一回事。
+
+    KIND_DATACENTER = "datacenter"
+    KIND_RESIDENTIAL = "residential"
+    KIND_MOBILE = "mobile"
+    KIND_UNKNOWN = "unknown"
+
+    @property
+    def kind(self) -> str:
+        """机房 / 家宽 / 移动 / 不确定。
+
+        优先用数据源的标志位；拿不到时退回启发式（组织名关键词 + rDNS 形态）。
+        判不出来就返回 unknown —— **不猜**，因为猜错的方向正好是最危险的
+        那个：把机房猜成家宽会让人以为风险更低。
+        """
+        if self.mobile:
+            return self.KIND_MOBILE
+        if self.hosting:
+            return self.KIND_DATACENTER
+        if self.hosting is False and self.mobile is False:
+            return self.KIND_RESIDENTIAL
+        return self._guess_kind()
+
+    def _guess_kind(self) -> str:
+        """没有标志位时的启发式兜底。"""
+        blob = " ".join(filter(None, [self.org, self.rdns])).lower()
+        if not blob:
+            return self.KIND_UNKNOWN
+        dc_words = ("hosting", "cloud", "vps", "datacenter", "data center",
+                    "server", "idc", "colo", "amazon", "google", "azure",
+                    "digitalocean", "vultr", "linode", "hetzner", "ovh",
+                    "contabo", "leaseweb", "oracle")
+        home_words = ("broadband", "telecom", "communications", "cable",
+                      "dsl", "fiber", "ftth", "residential", "ppp", "dialup")
+        if any(w in blob for w in dc_words):
+            return self.KIND_DATACENTER
+        if any(w in blob for w in home_words):
+            return self.KIND_RESIDENTIAL
+        return self.KIND_UNKNOWN
+
+    @property
+    def kind_evidence(self) -> str:
+        """这个判断是从哪来的。没有它，读者无法判断该不该信。"""
+        if self.mobile:
+            return "数据源标记为移动蜂窝网络"
+        if self.hosting is True:
+            return "数据源标记为机房 / 托管网络"
+        if self.hosting is False and self.mobile is False:
+            return "数据源明确标记为非机房、非移动 —— 即住宅或企业宽带"
+        if self._guess_kind() == self.KIND_UNKNOWN:
+            return "数据源没给分类标志，组织名和 rDNS 也看不出来 —— 不猜"
+        return "数据源没给标志，按组织名 / rDNS 形态推断（可信度较低）"
+
+    @property
+    def proxy_suspected(self) -> bool:
+        return bool(self.proxy_flag)
+
+    @property
+    def where(self) -> Optional[str]:
+        """人读的地理位置：城市 · 省 · 国家，缺哪段跳哪段。
+
+        国家相同但地址不同的时候，城市是**唯一**能把两个出口区分开的
+        人类可读信息 —— 「都是新加坡」和「一个新加坡一个吉隆坡」
+        是完全不同的两件事。
+        """
+        parts = [p for p in (self.city, self.region, self.country) if p]
+        # 城市和省常常同名（Singapore / Singapore），去重
+        deduped: list[str] = []
+        for p in parts:
+            if p not in deduped:
+                deduped.append(p)
+        return " · ".join(deduped) if deduped else None
+
+    @property
+    def short_org(self) -> Optional[str]:
+        """把 "EXMPL-SG-AP - Example Telecom Pte Ltd, SG" 压成 "Example Telecom"。
+
+        Cymru 的组织名格式是 `HANDLE - 全名, 国家`，整串放进卡片会撑爆一行，
+        而读者真正要认的是中间那个公司名。
+        """
+        if not self.org:
+            return None
+        name = self.org.split(" - ", 1)[-1]
+        name = name.rsplit(",", 1)[0].strip()
+        for tail in (" Pte Ltd", " Co., Ltd", " Ltd", " LLC", " Inc.", " KK",
+                     " PBC", " GmbH", " B.V.", " Corp", " AB", " SA"):
+            if name.endswith(tail):
+                name = name[: -len(tail)].strip()
+        # 削掉后缀后常留下一个尾逗号（"Anthropic, PBC" → "Anthropic,"）
+        return name.rstrip(" ,.-") or None
+
+
+@dataclass(frozen=True)
 class TraceView:
     """一次 `cdn-cgi/trace` 采样 —— "目的地眼里的你"。
 
@@ -57,24 +174,32 @@ class TraceView:
     peer_ip: Optional[str] = None    # 本机这条 TCP 实际连到的对端地址
     timing: Timing = field(default_factory=Timing)
     error: Optional[str] = None
+    egress_asn: Optional["AsnInfo"] = None   # 出口地址属于谁的网络
+    peer_asn: Optional["AsnInfo"] = None     # 对端地址属于谁
+    tls_info: Optional[dict] = None          # 证书信息，见 net.TlsInfo
+    clock_skew_s: Optional[float] = None     # 本机时钟与服务端的差（秒）
 
     @property
     def is_ipv6(self) -> bool:
         return bool(self.egress_ip) and ":" in (self.egress_ip or "")
 
+    @property
+    def family(self) -> Optional[str]:
+        if not self.egress_ip:
+            return None
+        return "IPv6" if self.is_ipv6 else "IPv4"
 
-@dataclass(frozen=True)
-class AsnInfo:
-    """一个 IP 的归属。source 记清是哪儿查来的，便于判断可信度。"""
+    @property
+    def tun_shortcut(self) -> bool:
+        """TCP 握手是不是被本机的 TUN 直接接下了。
 
-    ip: str
-    asn: Optional[str] = None
-    prefix: Optional[str] = None
-    country: Optional[str] = None
-    org: Optional[str] = None
-    city: Optional[str] = None
-    anycast: Optional[bool] = None
-    source: Optional[str] = None
+        判据：TCP 段 < 5ms 但 TLS 段 > 50ms。透明代理/TUN 会在本地**立刻**
+        完成三次握手，再自己去连真实目标，于是真实的往返成本全部挤进 TLS
+        和首字节里。不标出来，读者会看到「TCP 0.5ms」然后得出
+        「网络这一段没问题」的错误结论。
+        """
+        tcp, tls = self.timing.tcp_ms, self.timing.tls_ms
+        return bool(tcp is not None and tls is not None and tcp < 5 and tls > 50)
 
 
 @dataclass(frozen=True)
@@ -113,6 +238,23 @@ class Connection:
 
 
 @dataclass(frozen=True)
+class Check:
+    """一项环境级检查。
+
+    和 TraceView 的区别：TraceView 是"某个域名某条路径"的观测，
+    Check 是"这台机器此刻"的事实（IPv6 通不通、时钟准不准、
+    证书有没有被换过）。这些和具体域名无关，一轮只需要一份。
+    """
+
+    id: str
+    label: str
+    ok: bool
+    value: Optional[str] = None
+    detail: Optional[str] = None
+    severity: str = "info"        # ok / info / warn / critical
+
+
+@dataclass(frozen=True)
 class Sample:
     """一轮完整采样。UI 上看到的每一个数字都来自这里。"""
 
@@ -121,6 +263,7 @@ class Sample:
     traces: tuple[TraceView, ...] = ()
     resolves: tuple[ResolveView, ...] = ()
     connections: tuple[Connection, ...] = ()
+    checks: tuple[Check, ...] = ()
     notes: tuple[str, ...] = ()
 
     def to_json(self) -> dict:
@@ -129,6 +272,7 @@ class Sample:
 
 __all__ = [
     "AsnInfo",
+    "Check",
     "Connection",
     "ResolveView",
     "Sample",

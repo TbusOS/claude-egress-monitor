@@ -99,6 +99,119 @@
   }
 
   .wrap-mono { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+
+  /* ── 严重度：判断色是结论，不是系列色。四档，一屏里红色最多一两处 ── */
+  .sev { display: inline-flex; align-items: center; gap: 6px; }
+  .sev__dot {
+    width: 8px; height: 8px; border-radius: 50%; display: block; flex: none;
+    background: var(--atl-ink-3);
+  }
+  .sev--critical .sev__dot { background: var(--atl-down); }
+  .sev--warn     .sev__dot { background: var(--atl-warn); }
+  .sev--info     .sev__dot { background: var(--atl-accent-ink); }
+  .sev--ok       .sev__dot { background: var(--atl-up); }
+
+  /* ── 诊断条目 ── */
+  .finding { padding: var(--space-5) 0; border-bottom: 1px solid var(--atl-line); }
+  .finding:last-child { border-bottom: 0; }
+  .finding__head {
+    display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap;
+  }
+  .finding__title { font-size: 15px; font-weight: 700; }
+  .finding__grid {
+    display: grid; grid-template-columns: 76px minmax(0, 1fr);
+    gap: 7px var(--space-4); margin-top: var(--space-4);
+  }
+  .finding__key {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--atl-ink-3); padding-top: 2px;
+  }
+  .finding__val { font-size: 13.5px; line-height: 1.66; min-width: 0; }
+  .finding__fix {
+    white-space: pre-wrap; font-size: 13px; line-height: 1.7;
+    background: var(--atl-track); border-radius: var(--radius-sm);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  /* ── 环图：分类构成，最多 4 片 + 中性其余 ── */
+  .donut { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
+  .donut__figure { position: relative; width: 132px; height: 132px; flex: none; }
+  .donut__center {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+  }
+  .donut__total {
+    display: block; font-size: 23px; font-weight: 800; letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .donut__unit { display: block; font-size: 11px; color: var(--atl-ink-2); }
+  .donut__legend { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+  .donut__row { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+  .donut__swatch {
+    width: 10px; height: 10px; border-radius: 3px; display: block; flex: none;
+  }
+  .donut__name { font-weight: 600; }
+  .donut__num {
+    margin-left: auto; font-variant-numeric: tabular-nums; color: var(--atl-ink-2);
+  }
+
+  /* ── 出口地址明细：国家相同、地址不同的时候看这里 ── */
+  .exit-list { display: flex; flex-direction: column; gap: var(--space-3); }
+  .exit-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px var(--space-4); align-items: baseline;
+    padding: var(--space-3) 0; border-top: 1px solid var(--atl-line);
+  }
+  .exit-row:first-child { border-top: 0; }
+  .exit-row__ip {
+    font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere;
+    font-weight: 500;
+  }
+  .exit-row__meta {
+    grid-column: 1 / -1; font-size: 12px; color: var(--atl-ink-2);
+    line-height: 1.6;
+  }
+
+  /* ── 历史看板 ── */
+  .day-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+    gap: var(--space-4);
+  }
+  .day-card {
+    text-align: left; width: 100%; border: 1px solid var(--atl-line);
+    background: var(--atl-card-bg); border-radius: var(--radius-md);
+    padding: var(--space-4); cursor: pointer; font-family: inherit;
+    color: var(--atl-ink); transition: border-color var(--duration-xs) var(--ease-atl);
+  }
+  .day-card:hover { border-color: var(--atl-accent-ink); }
+  .day-card.is-picked {
+    border-color: var(--atl-accent-ink); box-shadow: inset 0 0 0 1px var(--atl-accent-ink);
+  }
+  .day-card__day {
+    display: block; font-size: 15px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .day-card__meta {
+    display: block; font-size: 12px; color: var(--atl-ink-2); margin-top: 4px;
+  }
+  /* `.atl-meter` 是 <span>，本身没有 display —— 它在别处都待在 flex 容器里
+     所以变成了块级。这里的父元素是普通 button，inline 盒子会**静默忽略**
+     height，结果 fill 撑成一根巨大的竖条溢出到卡片外。
+     这是 atelier 已知坑第一条：把 <span> 当块用。 */
+  .day-card__bar {
+    display: block; width: 100%; height: 7px; margin-top: 10px;
+  }
+  .hour-chart { display: flex; align-items: flex-end; gap: 2px; height: 92px; }
+  .hour-chart__col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+  .hour-chart__fill {
+    display: block; background: var(--atl-grad); border-radius: 3px; min-height: 2px;
+  }
+  .hour-chart__fill--empty { background: var(--atl-track); }
+  .hour-axis {
+    display: flex; justify-content: space-between; font-size: 10px;
+    color: var(--atl-ink-3); margin-top: 6px;
+  }
+  .toolbar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -162,6 +275,16 @@
           <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V9.5M10 20V4.5M16 20v-8M22 20H2"/></svg>
           <span class="lang-zh">延迟分解</span><span class="lang-en">Latency</span>
         </button>
+        <button type="button" class="atl-nav" data-route="diagnostics" data-route-title="诊断与建议">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3.6l8.4 4.2v5c0 4.4-3.4 7.2-8.4 8.6-5-1.4-8.4-4.2-8.4-8.6v-5z"/><path d="M9.2 12.2l2 2 3.6-3.8"/></svg>
+          <span class="lang-zh">诊断与建议</span><span class="lang-en">Diagnostics</span>
+          <span class="atl-nav__badge" data-cem="badge-findings">0</span>
+        </button>
+        <button type="button" class="atl-nav" data-route="history" data-route-title="历史看板">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4M7.5 14h3M13.5 14h3M7.5 17.5h3"/></svg>
+          <span class="lang-zh">历史看板</span><span class="lang-en">History</span>
+          <span class="atl-nav__badge" data-cem="badge-days">0</span>
+        </button>
       </nav>
 
       <nav class="atl-navgroup">
@@ -171,6 +294,10 @@
         <button type="button" class="atl-nav" data-route="dns" data-route-title="解析对账">
           <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="18.5" cy="12" r="2.2"/></svg>
           <span class="lang-zh">解析对账</span><span class="lang-en">DNS truth</span>
+        </button>
+        <button type="button" class="atl-nav" data-route="telemetry" data-route-title="遥测字段">
+          <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 20v-7"/><path d="M8.5 16.5a5 5 0 017 0"/><path d="M5.5 13.5a9 9 0 0113 0"/><circle cx="12" cy="21" r="1"/></svg>
+          <span class="lang-zh">遥测字段</span><span class="lang-en">Telemetry fields</span>
         </button>
         <button type="button" class="atl-nav" data-route="inventory" data-route-title="出网域名清单">
           <svg class="atl-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h8l5 5v13a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>
@@ -560,6 +687,212 @@
         </div>
       </section>
 
+      <!-- ------------------------ 面板：诊断与建议 ------------------------ -->
+      <section class="atl-pane" data-pane="diagnostics" hidden>
+        <div class="atl-grid atl-grid--main-side">
+          <div class="atl-card" data-reveal>
+            <div class="atl-card__head">
+              <div>
+                <h2 class="atl-card__title">
+                  <span class="lang-zh">诊断与解决方案</span><span class="lang-en">Findings and fixes</span>
+                </h2>
+                <p class="atl-muted" style="margin:4px 0 0; font-size:13px; max-width:72ch;">
+                  <span class="lang-zh">每条都带三样东西：<strong>判据</strong>（算出它的实测数字）、<strong>成因</strong>（不是现象的复述）、<strong>下一步</strong>（可以直接照做的命令或配置）。没有判据的建议不值得照做。</span>
+                  <span class="lang-en">Each carries three things: the <strong>evidence</strong> that produced it, the <strong>cause</strong> (not a restatement of the symptom), and a <strong>next step</strong> you can actually run. A recommendation without evidence is not worth following.</span>
+                </p>
+              </div>
+              <div class="atl-row" data-cem="sev-chips"></div>
+            </div>
+            <div data-cem="findings-list">
+              <div class="empty">
+                <span class="empty__title">
+                  <span class="lang-zh">还没有诊断</span><span class="lang-en">Nothing diagnosed yet</span>
+                </span>
+                <span class="empty__hint">
+                  <span class="lang-zh">采一轮之后，这里会列出出口不一致、跨国漂移、受限地区、DNS 被改写、证书异常等问题，各自带上怎么修。</span>
+                  <span class="lang-en">After a round this lists mismatched exits, cross-country drift, restricted regions, rewritten DNS and certificate anomalies — each with how to fix it.</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="atl-card" data-reveal data-reveal-delay="60">
+            <div class="atl-card__head">
+              <h2 class="atl-card__title">
+                <span class="lang-zh">环境检查</span><span class="lang-en">Environment checks</span>
+              </h2>
+            </div>
+            <p class="atl-muted" style="margin:0 0 var(--space-4); font-size:12.5px; line-height:1.7;">
+              <span class="lang-zh">这些和具体域名无关，是「这台机器此刻」的事实：IPv6 通不通、时钟准不准、TLS 有没有被中间人拆开、两个权威 DNS 源是否一致、代理端口有没有进程在听。</span>
+              <span class="lang-en">These are machine-level facts rather than per-domain ones: IPv6 reachability, clock accuracy, whether TLS is being intercepted, whether two authoritative DNS sources agree, and whether the proxy port is actually listening.</span>
+            </p>
+            <div data-cem="checks-list"></div>
+          </div>
+        </div>
+
+        <div class="atl-card" data-reveal>
+          <div class="atl-card__head">
+            <h2 class="atl-card__title">
+              <span class="lang-zh">出口稳定性</span><span class="lang-en">Exit stability</span>
+            </h2>
+            <span class="atl-muted" style="font-size:12.5px;">
+              <span class="lang-zh">按当前窗口统计</span><span class="lang-en">over the current window</span>
+            </span>
+          </div>
+          <div class="atl-scroll">
+            <table class="atl-table">
+              <thead>
+                <tr>
+                  <th><span class="lang-zh">入口</span><span class="lang-en">Entry</span></th>
+                  <th class="atl-table__num"><span class="lang-zh">轮数</span><span class="lang-en">rounds</span></th>
+                  <th class="atl-table__num"><span class="lang-zh">出现过的地址</span><span class="lang-en">addresses</span></th>
+                  <th class="atl-table__num"><span class="lang-zh">网络数</span><span class="lang-en">networks</span></th>
+                  <th class="atl-table__num"><span class="lang-zh">地址变更</span><span class="lang-en">IP changes</span></th>
+                  <th class="atl-table__num"><span class="lang-zh">跨国变更</span><span class="lang-en">country changes</span></th>
+                  <th><span class="lang-zh">判定</span><span class="lang-en">verdict</span></th>
+                </tr>
+              </thead>
+              <tbody data-cem="stability-body">
+                <tr><td colspan="7" class="atl-muted" style="padding:var(--space-6); text-align:center;">
+                  <span class="lang-zh">至少采两轮才能看出漂移</span><span class="lang-en">Needs at least two rounds</span>
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ 面板：历史看板 ------------------------ -->
+      <section class="atl-pane" data-pane="history" hidden>
+        <div class="atl-card" data-reveal>
+          <div class="atl-card__head">
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">按天归档</span><span class="lang-en">Archived by day</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:13px; max-width:74ch;">
+                <span class="lang-zh">每轮只存结论性字段（约 1 KB），按天分文件，所以一天大约几 MB。点卡片选中一天或多天看汇总；选中之后可以删掉 —— 长期开着监控，历史会一直涨，删除必须是一等功能。</span>
+                <span class="lang-en">Only conclusion fields are stored (about 1 KB per round), one file per day, so a day costs a few MB. Click cards to select one or more days; selected days can be deleted — with monitoring left running, history grows forever, so deletion is a first-class feature.</span>
+              </p>
+            </div>
+            <span class="atl-chip" data-cem="history-total">—</span>
+          </div>
+
+          <div class="toolbar" style="margin-bottom:var(--space-5);">
+            <button type="button" class="atl-btn atl-btn--sm" data-cem="days-all">
+              <span class="lang-zh">全选</span><span class="lang-en">Select all</span>
+            </button>
+            <button type="button" class="atl-btn atl-btn--sm atl-btn--ghost" data-cem="days-none">
+              <span class="lang-zh">清空选择</span><span class="lang-en">Clear</span>
+            </button>
+            <button type="button" class="atl-btn atl-btn--sm atl-btn--ghost" data-cem="days-delete">
+              <span class="lang-zh">删除选中的天</span><span class="lang-en">Delete selected</span>
+            </button>
+            <span class="atl-muted" style="font-size:12.5px;" data-cem="days-hint"></span>
+          </div>
+
+          <div class="day-grid" data-cem="day-grid">
+            <p class="atl-muted" style="font-size:13px;">
+              <span class="lang-zh">还没有归档数据。打开监控跑一段时间，这里会按天出现。</span>
+              <span class="lang-en">No archive yet. Turn monitoring on for a while and days will show up here.</span>
+            </p>
+          </div>
+        </div>
+
+        <div class="atl-grid atl-grid--3" data-cem="range-kpis" hidden>
+          <div class="atl-card atl-card--tight">
+            <span class="atl-kpi__label"><span class="lang-zh">选中区间轮数</span><span class="lang-en">Rounds selected</span></span>
+            <span class="atl-kpi__value" data-cem="range-rounds">—</span>
+          </div>
+          <div class="atl-card atl-card--tight">
+            <span class="atl-kpi__label"><span class="lang-zh">出口地址变更</span><span class="lang-en">Exit changes</span></span>
+            <span class="atl-kpi__value" data-cem="range-changes">—</span>
+          </div>
+          <div class="atl-card atl-card--tight">
+            <span class="atl-kpi__label"><span class="lang-zh">跨国变更</span><span class="lang-en">Country changes</span></span>
+            <span class="atl-kpi__value" data-cem="range-cc">—</span>
+          </div>
+        </div>
+
+        <div class="atl-grid atl-grid--2">
+          <div class="atl-card" data-reveal>
+            <div class="atl-card__head">
+              <h2 class="atl-card__title">
+                <span class="lang-zh">出口国家构成</span><span class="lang-en">Exit countries</span>
+              </h2>
+            </div>
+            <div data-cem="country-donut">
+              <p class="atl-muted" style="margin:0; font-size:13px;">
+                <span class="lang-zh">选中一天或多天后显示。超过 4 类会合并成「其余」——环图切片多于 4 片就只能靠图例才读得懂，那说明它已经不工作了。</span>
+                <span class="lang-en">Shown once days are selected. More than four categories collapse into “rest” — beyond four slices a donut can only be read via its legend, which means it has stopped working.</span>
+              </p>
+            </div>
+          </div>
+
+          <div class="atl-card" data-reveal data-reveal-delay="60">
+            <div class="atl-card__head">
+              <h2 class="atl-card__title">
+                <span class="lang-zh">出口网络构成</span><span class="lang-en">Exit networks</span>
+              </h2>
+            </div>
+            <div data-cem="network-donut">
+              <p class="atl-muted" style="margin:0; font-size:13px;">
+                <span class="lang-zh">按 ASN 分。国家相同但 ASN 不同，说明是**不同的网络**，只是恰好在同一个国家。</span>
+                <span class="lang-en">Grouped by ASN. Same country with different ASNs means genuinely different networks that merely share a country.</span>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="atl-card" data-reveal>
+          <div class="atl-card__head">
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">按小时分布</span><span class="lang-en">By hour</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:12.5px;">
+                <span class="lang-zh">柱高是该小时的 p50 往返耗时，轨道是当天最大值。空的小时表示那时候没在采样。</span>
+                <span class="lang-en">Bar height is that hour's p50 round trip against the day's max. Empty hours mean sampling was off.</span>
+              </p>
+            </div>
+            <span class="atl-muted" style="font-size:12.5px;" data-cem="hourly-day">—</span>
+          </div>
+          <div class="hour-chart" data-cem="hour-chart"></div>
+          <div class="hour-axis">
+            <span>00</span><span>06</span><span>12</span><span>18</span><span>23</span>
+          </div>
+        </div>
+
+        <div class="atl-card atl-card--flush" data-reveal>
+          <div class="atl-card__head" style="padding:var(--space-5) var(--space-5) 0; margin-bottom:var(--space-3);">
+            <h2 class="atl-card__title">
+              <span class="lang-zh">出现过的出口地址</span><span class="lang-en">Exit addresses seen</span>
+            </h2>
+            <span class="atl-muted" style="font-size:12.5px;">
+              <span class="lang-zh">国家相同也要看地址</span><span class="lang-en">same country still differs by address</span>
+            </span>
+          </div>
+          <div class="atl-scroll">
+            <table class="atl-table">
+              <thead>
+                <tr>
+                  <th><span class="lang-zh">出口地址</span><span class="lang-en">Address</span></th>
+                  <th><span class="lang-zh">协议</span><span class="lang-en">Family</span></th>
+                  <th><span class="lang-zh">位置</span><span class="lang-en">Location</span></th>
+                  <th><span class="lang-zh">网络</span><span class="lang-en">Network</span></th>
+                  <th style="width:150px;"><span class="lang-zh">占比</span><span class="lang-en">Share</span></th>
+                </tr>
+              </thead>
+              <tbody data-cem="addresses-body">
+                <tr><td colspan="5" class="atl-muted" style="padding:var(--space-6); text-align:center;">
+                  <span class="lang-zh">选中一天或多天后显示</span><span class="lang-en">Select days to see this</span>
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- ------------------------ 面板：解析对账 ------------------------ -->
       <section class="atl-pane" data-pane="dns" hidden>
         <div class="atl-card" data-reveal>
@@ -592,6 +925,41 @@
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- ------------------------ 面板：遥测字段 ------------------------ -->
+      <section class="atl-pane" data-pane="telemetry" hidden>
+        <div class="atl-card" data-reveal>
+          <div class="atl-card__head">
+            <div>
+              <h2 class="atl-card__title">
+                <span class="lang-zh">遥测会上报哪些字段</span><span class="lang-en">What telemetry reports</span>
+              </h2>
+              <p class="atl-muted" style="margin:4px 0 0; font-size:13px; max-width:74ch;">
+                <span class="lang-zh"><strong>静态提取</strong>：只读你自己电脑上那个文件里的明文字符串，不解密流量、不注入进程、不修改任何东西。Claude Code 是未加密的 JS bundle，构造上报内容的那段代码本来就是明文。</span>
+                <span class="lang-en"><strong>Static extraction</strong>: reads plain strings out of a file already on your disk. No decryption, no injection, nothing modified. Claude Code ships as an unencrypted JS bundle, so the code that builds the payload is readable as-is.</span>
+              </p>
+            </div>
+            <button type="button" class="atl-btn atl-btn--sm" data-cem="telemetry-load">
+              <span class="lang-zh">提取</span><span class="lang-en">Extract</span>
+            </button>
+          </div>
+          <div data-cem="telemetry-body">
+            <div class="empty">
+              <span class="empty__title">
+                <span class="lang-zh">按「提取」开始</span><span class="lang-en">Press “Extract”</span>
+              </span>
+              <span class="empty__hint">
+                <span class="lang-zh">要扫一遍几百 MB 的可执行文件，需要几秒。所以它不跟着每轮采样跑，按需触发。</span>
+                <span class="lang-en">It scans a few hundred MB of executable, so it takes a few seconds and runs on demand rather than every round.</span>
+              </span>
+            </div>
+          </div>
+          <p class="atl-muted" style="margin:var(--space-5) 0 0; font-size:12.5px; line-height:1.7;">
+            <span class="lang-zh"><strong>这里答不了什么</strong>：静态提取只能知道「<strong>会</strong>发哪些字段」，不知道「某一次<strong>具体</strong>发了什么值」。后者要解密 TLS —— 需要装一个根 CA，而根 CA 私钥一旦泄露，本机所有 HTTPS 都可被解密。这个代价大于收益，所以本仓不做，也不提供做这件事的工具。</span>
+            <span class="lang-en"><strong>What this cannot answer</strong>: static extraction reveals which fields <strong>can</strong> be sent, never what a specific request actually contained. That would require decrypting TLS, which means installing a root CA — and a leaked root CA key means every HTTPS session on this machine is readable. The cost outweighs the benefit, so this repo does not do it.</span>
+          </p>
         </div>
       </section>
 
