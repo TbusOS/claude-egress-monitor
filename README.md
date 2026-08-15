@@ -14,9 +14,9 @@ claude.ai —— 同一台机器上，这三个入口的出口 IP 和落地地�
 两个入口的出口不一致时**具体该改哪一行配置**，以及长期开着监控之后
 **按天归档的历史看板**（可选、可删）。
 
-**📖 文档站：<https://tbusos.github.io/claude-egress-monitor/>** ·
-**🖥 可点的成品界面：<https://tbusos.github.io/claude-egress-monitor/demo.html>** ·
-**🧩 架构与设计：<https://tbusos.github.io/claude-egress-monitor/architecture.html>**
+**📖 文档站：<https://doc.tbusos.com/claude-egress-monitor/>** ·
+**🖥 可点的成品界面：<https://doc.tbusos.com/claude-egress-monitor/demo.html>** ·
+**🧩 架构与设计：<https://doc.tbusos.com/claude-egress-monitor/architecture.html>**
 
 ![总览](docs/img/overview.jpg)
 
@@ -56,7 +56,7 @@ Node 默认**不读系统代理**。所以：
 要求 **Python 3.9+**，macOS。不需要安装任何包，不需要 root。
 
 ```bash
-git clone <这个仓库>
+git clone https://github.com/TbusOS/claude-egress-monitor.git
 cd claude-egress-monitor
 
 # 1. 先看清本机三个入口各走哪条路（不发任何探测）
@@ -285,11 +285,11 @@ Datadog 是一家做监控 / 可观测性的美国 SaaS 公司。软件把自己
 | [06-toolbox.md](docs/06-toolbox.md) | 全部检测手段清单；为什么不用逆向工具，以及解密的代价 |
 | [07-datasources.md](docs/07-datasources.md) | **每个结论从哪来**：数据源地址、更新频率、缓存、许可、撑到哪一档置信度 |
 | [08-deploy.md](docs/08-deploy.md) | 安装、命令、界面参数、launchd 长期运行、数据存哪怎么删、怎么卸载 |
-| [架构与设计](https://tbusos.github.io/claude-egress-monitor/architecture.html) | 模块分层、一轮采样的数据流、七条设计取舍 |
+| [架构与设计](https://doc.tbusos.com/claude-egress-monitor/architecture.html) | 模块分层、一轮采样的数据流、七条设计取舍 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 模块地图、四条硬规矩、怎么加域名 / 数据源 / 诊断规则 |
 
 同样的内容在文档站上是排过版的 HTML：
-<https://tbusos.github.io/claude-egress-monitor/>。
+<https://doc.tbusos.com/claude-egress-monitor/>。
 站点由 `docs/*.md` 生成，改文档改 `.md` 就行：
 
 ```bash
@@ -320,7 +320,7 @@ python3 scripts/build_docs.py --check   # 检查有没有忘了跑
 所以换前端不用碰采集代码，加数据源不用碰界面。
 
 带图的完整版（模块图 + 一轮采样的数据流 + 七条设计取舍）在
-**[架构与设计](https://tbusos.github.io/claude-egress-monitor/architecture.html)**。
+**[架构与设计](https://doc.tbusos.com/claude-egress-monitor/architecture.html)**。
 
 ---
 
