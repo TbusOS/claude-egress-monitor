@@ -76,9 +76,13 @@ class Sampler:
         asn_cache: Optional[AsnCache] = None,
         on_sample: Optional[Callable[[Sample], None]] = None,
         day_store=None,
+        discovery=None,
     ):
         self._history = history
         self._day_store = day_store
+        # 边采边攒"见过哪些域名"。清单是人手维护的，会过期；
+        # 这里累积的是这台机器上真的连过的，跨重启保留。
+        self._discovery = discovery
         self._config = config or SamplerConfig()
         self._asn = asn_cache
         self._on_sample = on_sample
@@ -189,6 +193,10 @@ class Sampler:
         # 长期历史落盘：紧凑记录，一轮几百字节，按天分文件。
         if self._day_store is not None:
             self._day_store.append(sample)
+        if self._discovery is not None:
+            from . import discover
+            self._discovery.record(discover.from_connections(sample.connections),
+                                   source="observed")
         if self._on_sample:
             self._on_sample(sample)
         return sample

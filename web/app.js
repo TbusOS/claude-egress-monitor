@@ -1832,6 +1832,61 @@
     fetchPath();
   }
 
+  // ------------------------------------------------------ 导出域名清单
+
+  /** 让浏览器下载一个接口返回的文件。
+   *
+   *  用 blob 而不是直接把 href 指到接口：这样失败时能拿到错误、
+   *  能显示按钮的忙态，而不是静默打开一个空白页。 */
+  function downloadExport(btn, fmt) {
+    var release = busy(btn, '生成中', 'building');
+    var ok = false;
+    return fetch('/api/export?format=' + encodeURIComponent(fmt),
+                 { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        var name = 'claude-domains.txt';
+        var cd = r.headers.get('Content-Disposition') || '';
+        var m = /filename="([^"]+)"/.exec(cd);
+        if (m) name = m[1];
+        return r.blob().then(function (blob) { return { blob: blob, name: name }; });
+      })
+      .then(function (file) {
+        var url = window.URL.createObjectURL(file.blob);
+        var a = el('a', { href: url, download: file.name }, []);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // 立刻 revoke 有些浏览器会来不及下载，给一秒。
+        window.setTimeout(function () { window.URL.revokeObjectURL(url); }, 1000);
+        ok = true;
+      })
+      .catch(function (err) {
+        window.console.warn('[cem] 导出失败', err);
+        var hint = q('export-hint');
+        if (hint) {
+          clear(hint);
+          hint.appendChild(biSpan('导出失败：' + err.message,
+                                  'export failed: ' + err.message));
+        }
+      })
+      .then(function () {
+        if (ok) release('已下载', 'downloaded');
+        else release();
+      });
+  }
+
+  function wireExport() {
+    [['export-md', 'markdown'], ['export-txt', 'text'], ['export-json', 'json']]
+      .forEach(function (pair) {
+        var btn = q(pair[0]);
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          downloadExport(btn, pair[1]);
+        });
+      });
+  }
+
   // ------------------------------------------------------------ 渲染：状态
 
   function renderStatus(state) {
@@ -2080,6 +2135,7 @@
     wireHistory();
     wireTelemetry();
     wirePathQuality();
+    wireExport();
     wireLangReflow();
     refresh().then(connectStream);
   }

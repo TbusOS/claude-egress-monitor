@@ -269,6 +269,55 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
 # ------------------------------------------------------------------- serve
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """导出「Claude 会访问哪些域名」的全集。
+
+    三个来源合并去重：内置清单 + 扫本机安装 + 实时观测。
+    扫描默认开着 —— 清单是人手维护的，不重新扫就等于导出一份过期的表。
+    """
+    from . import discover, export
+
+    store = discover.DiscoveryStore(
+        Path(args.cache_dir or "./data") / "discovered.json")
+    if not args.no_scan:
+        print("正在扫本机装的 Claude（读文件，不发请求）……", file=sys.stderr)
+        found = discover.scan_installed()
+        fresh = 0
+        for source, hosts in found.items():
+            fresh += store.record(hosts, source="scan-cli"
+                                  if source == "cli-strings" else "scan-desktop")
+        for source, hosts in found.items():
+            print(f"  {source}: {len(hosts)} 个域名", file=sys.stderr)
+        if fresh:
+            print(f"  其中 {fresh} 个是第一次见到", file=sys.stderr)
+        if not found:
+            print("  没找到本机安装，跳过扫描", file=sys.stderr)
+
+    samples: tuple[Sample, ...] = ()
+    if args.observe:
+        print("正在看 Claude 的进程此刻连着谁……", file=sys.stderr)
+        samples = (probe.run_once(
+            seq=1, routes=pathmod.discover(), include_optional=True,
+            include_telemetry=False, with_resolve=True, with_sockets=True,
+            with_path=False, asn_cache=None, timeout=6.0), )
+
+    doc = export.build(samples, discovered=store.all(),
+                       include_unknown=args.include_unknown)
+    text = export.render(doc, args.format)
+
+    if args.output:
+        out = Path(args.output).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(f"写入 {out}（{len(doc.rows)} 个域名）", file=sys.stderr)
+        if doc.withheld:
+            print(f"扣下 {len(doc.withheld)} 个父域不认识的域名，"
+                  f"没有写进文件。要带上加 --include-unknown", file=sys.stderr)
+    else:
+        print(text)
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     jsonl = Path(args.persist).expanduser() if args.persist else None
     history = History(jsonl_path=jsonl)
@@ -277,9 +326,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
     day_store = DayStore(archive_dir)
     cache = _asn_cache(Path(args.cache_dir) if args.cache_dir else None,
                        with_cloud=not args.no_cloud_ranges)
+    from . import discover
+    discovery = discover.DiscoveryStore(
+        (Path(args.cache_dir) if args.cache_dir else Path("./data"))
+        / "discovered.json")
     sampler = Sampler(
         history,
         day_store=day_store,
+        discovery=discovery,
         config=SamplerConfig(
             interval_s=args.interval,
             include_optional=args.all,
@@ -292,7 +346,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
     httpd, sampler, history, _bus = build_server(
         host=args.host, port=args.port, history=history, sampler=sampler,
-        day_store=day_store, demo=args.demo,
+        day_store=day_store, demo=args.demo, discovery=discovery,
     )
     if args.demo:
         from . import demo
@@ -367,6 +421,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_tele.add_argument("--all-events", action="store_true",
                         help="列出全部事件名，不截断")
     p_tele.set_defaults(func=cmd_telemetry)
+
+    p_export = sub.add_parser(
+        "export", help="导出 Claude 会访问的域名全集（可直接发给别人）")
+    p_export.add_argument("--format", choices=("markdown", "text", "json"),
+                          default="markdown", help="默认 markdown")
+    p_export.add_argument("-o", "--output", default=None,
+                          help="写到文件；不给就打印到标准输出")
+    p_export.add_argument("--no-scan", action="store_true",
+                          help="不扫本机安装，只用已有的发现记录")
+    p_export.add_argument("--observe", action="store_true",
+                          help="顺带看一眼此刻的实时连接（需要 lsof）")
+    p_export.add_argument("--include-unknown", action="store_true",
+                          help="把父域不认识的域名也导出（可能含你自己的服务器，先看一眼）")
+    p_export.add_argument("--cache-dir", default=None,
+                          help="发现记录存哪，默认 ./data")
+    p_export.set_defaults(func=cmd_export)
 
     p_serve = sub.add_parser("serve", parents=[common], help="启动网页界面")
     p_serve.add_argument("--host", default="127.0.0.1",

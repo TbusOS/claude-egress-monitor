@@ -1260,6 +1260,27 @@
             </div>
             <span class="atl-chip atl-chip--accent" data-cem="inv-version">CLI —</span>
           </div>
+
+          <!-- 导出。这份文件是要发给别人的，所以按钮旁边必须写清楚
+               里面有什么、没有什么 —— 让人在点之前就知道自己在分享什么。 -->
+          <div class="toolbar" style="margin-top:var(--space-5); padding-top:var(--space-4); border-top:1px solid var(--atl-line);">
+            <button type="button" class="atl-btn atl-btn--sm" data-cem="export-md">
+              <span class="lang-zh">导出清单 · Markdown</span><span class="lang-en">Export · Markdown</span>
+            </button>
+            <button type="button" class="atl-btn atl-btn--sm atl-btn--ghost" data-cem="export-txt">
+              <span class="lang-zh">纯域名列表</span><span class="lang-en">Domains only</span>
+            </button>
+            <button type="button" class="atl-btn atl-btn--sm atl-btn--ghost" data-cem="export-json">JSON</button>
+            <span class="atl-muted" style="font-size:12px;" data-cem="export-hint">
+              <span class="lang-zh">合并三个来源去重：内置清单 + 扫本机安装 + 实时观测</span>
+              <span class="lang-en">Three sources merged and deduped: inventory + local scan + live observation</span>
+            </span>
+          </div>
+          <p class="atl-muted" style="margin:var(--space-3) 0 0; font-size:12.5px; line-height:1.7;">
+            <span class="lang-zh"><strong>导出的文件可以直接发给别人</strong>：里面只有域名和用途，没有出口 IP、没有代理端口、没有进程名、没有 ASN 归属、也没有延迟数字。父域不认识的域名（可能是你自己配的 MCP 服务器）默认被扣下不导出，只报个数。</span>
+            <span class="lang-en"><strong>The exported file is safe to share</strong>: domains and purposes only — no exit IP, no proxy port, no process name, no ASN, no latency figures. Domains under an unrecognised parent (possibly your own MCP server) are withheld by default and only counted.</span>
+          </p>
+
           <div data-cem="inventory-list" style="margin-top:var(--space-5);"></div>
         </div>
       </section>

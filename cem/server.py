@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Optional
 
 from . import demo as demo_mod
+from . import discover as discover_mod
+from . import export as export_mod
 from . import endpoints as ep
 from . import history as histmod
 from . import view
@@ -93,6 +95,7 @@ class _Handler(BaseHTTPRequestHandler):
     day_store: object
     pathwatch: PathWatcher
     demo: bool
+    discovery: object
 
     def log_message(self, fmt: str, *args) -> None:      # noqa: A003
         """默认的 stderr 访问日志会把每次 SSE 心跳都刷出来，关掉。"""
@@ -183,6 +186,8 @@ class _Handler(BaseHTTPRequestHandler):
             # 安装路径放进一个准备被截图公开的界面里。
             self._send_json(demo_mod.telemetry() if self.demo
                             else view.telemetry_payload())
+        elif path == "/api/export":
+            self._export()
         elif path == "/api/status":
             self._send_json(self.sampler.status())
         elif path == "/api/stream":
@@ -220,6 +225,37 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "seq": sample.seq})
         else:
             self._send_error_json(404, "not found")
+
+    def _export(self) -> None:
+        """导出域名全集。参数 ?format=markdown|text|json&unknown=1
+
+        这个接口的产物是**要发给别人的**，所以字段白名单在 export.py 里，
+        不在这儿 —— 路由层不该有"哪些字段能出去"的决定权。
+        """
+        from urllib.parse import parse_qs, urlparse as _u
+        query = parse_qs(_u(self.path).query)
+        fmt = (query.get("format") or ["markdown"])[0]
+        if fmt not in export_mod.FORMATS:
+            self._send_error_json(400, f"format 只能是 "
+                                       f"{', '.join(sorted(export_mod.FORMATS))}")
+            return
+        unknown = (query.get("unknown") or ["0"])[0] in ("1", "true", "yes")
+        store = self.discovery
+        doc = export_mod.build(
+            self.history.recent(500),
+            discovered=store.all() if store is not None else {},
+            include_unknown=unknown,
+        )
+        body = export_mod.render(doc, fmt).encode("utf-8")
+        name = "claude-domains" + export_mod.EXTENSIONS[fmt]
+        self.send_response(200)
+        self.send_header("Content-Type", export_mod.MEDIA_TYPES[fmt])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Disposition",
+                         f'attachment; filename="{name}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _monitor(self) -> None:
         data = self._read_json()
@@ -377,6 +413,7 @@ def build_server(
     day_store=None,
     pathwatch: Optional[PathWatcher] = None,
     demo: bool = False,
+    discovery=None,
 ) -> tuple[ThreadingHTTPServer, Sampler, History, Broadcaster]:
     hist = history or History()
     bus = Broadcaster()
@@ -395,6 +432,7 @@ def build_server(
     handler = type("Handler", (_Handler,), {
         "history": hist, "sampler": smp, "bus": bus, "web_root": web_root,
         "day_store": day_store, "pathwatch": watcher, "demo": demo,
+        "discovery": discovery,
     })
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
