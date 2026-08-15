@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>遥测：那个 Datadog 是哪儿的，怎么关 — claude-egress-monitor</title>
+<meta name="description" content="一家做监控 / 可观测性的美国 SaaS 公司（纽交所 DDOG）。它卖的东西很简单： 你的软件把自己的运行日志、性能指标、报错发到 Datadog 的服务器， 你的团队在 Datadog 的网页控制台里看图表、查报错、设告警。 同类产品还有 New Relic、Grafana Cloud、Splu">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/anthropic.css">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<nav class="anth-nav"><div class="anth-nav-inner">
+  <a class="brand" href="index.html">claude-egress-monitor</a>
+  <div class="nav-links"><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+  <div class="nav-side">
+    <a href="demo.html">Demo</a>
+    <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div></nav>
+<main class="chapter">
+  <div class="chapter__inner">
+    <aside class="chapter__toc">
+      <span class="chapter__toc-label">本页</span>
+      <a href="#零datadog-是什么">零、Datadog 是什么</a><a href="#一结论">一、结论</a><a href="#二datadog-us5-到底是哪里">二、Datadog US5 到底是哪里</a><a href="#二点五一条命令看全部字段">二点五、一条命令看全部字段</a><a href="#三cli-里的硬编码证据">三、CLI 里的硬编码证据</a><a href="#四怎么关">四、怎么关</a><a href="#五为什么这件事值得关心">五、为什么这件事值得关心</a>
+    </aside>
+    <article class="chapter__body">
+      <span class="anth-badge">第 2 章 · 遥测</span>
+      <h1 id="遥测那个-datadog-是哪儿的怎么关">遥测：那个 Datadog 是哪儿的，怎么关</h1>
+<h2 id="零datadog-是什么">零、Datadog 是什么</h2>
+<p><strong>一家做监控 / 可观测性的美国 SaaS 公司</strong>（纽交所 DDOG）。它卖的东西很简单： 你的软件把自己的运行日志、性能指标、报错发到 Datadog 的服务器， 你的团队在 Datadog 的网页控制台里看图表、查报错、设告警。 同类产品还有 New Relic、Grafana Cloud、Splunk。</p>
+<p>所以看到 Claude Code 连 <code>datadoghq.com</code> 时，正确的理解是： <strong>Claude Code 把自己的客户端运行日志发给了 Anthropic 的监控服务商</strong>， Anthropic 用它看&quot;客户端有没有崩、慢在哪、哪个功能报错多&quot;。 这不是一个可疑的第三方，而是这类软件的标准做法。</p>
+<p>真正要问清的只有三件事，这份文档就答这三件：</p>
+<ol><li><strong>发到哪个地区</strong> —— Datadog 分成好几个互不相通的站点， Claude Code 用的是落在<strong>美国 Google Cloud</strong> 上的那个（US5）。</li><li><strong>多久发一次、发多少</strong> —— 默认 15 秒一批，一批最多 100 条。</li><li><strong>能不能关</strong> —— 能，有环境变量；桌面端和网页端只能在网络层拦。</li></ol>
+<p>至于<strong>包里具体写了什么内容</strong>，静态分析答不了，这个工具也不去解密 TLS 偷看。它只回答&quot;流量去了哪、走了哪条路、多久一次&quot;。</p>
+<h2 id="一结论">一、结论</h2>
+<p>Claude Code 的遥测有三条独立的链路，落在三家不同的服务上：</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>链路</th><th>目的地</th><th>区域</th><th>谁在用</th></tr></thead>
+<tbody>
+<tr><td>日志</td><td><code>http-intake.logs.us5.datadoghq.com</code></td><td>Datadog <strong>US5</strong> 站点，落地美国</td><td>Claude Code（CLI）</td></tr>
+<tr><td>前端日志 / RUM</td><td><code>browser-intake-us5-datadoghq.com</code></td><td>同上</td><td>桌面端、网页端</td></tr>
+<tr><td>崩溃 / 异常</td><td><code>o1158394.ingest.us.sentry.io</code></td><td>Sentry <strong>US</strong> 区</td><td>CLI、桌面端</td></tr>
+</tbody></table></div>
+<p>再加一条<strong>不是遥测但常被算进来</strong>的：<code>a-api.anthropic.com</code> / <code>a-cdn.anthropic.com</code> 是第一方的特性开关与配置下发， 关掉它会影响功能开关下发，和&quot;上报&quot;不是一回事。</p>
+<hr class="anth-divider">
+<h2 id="二datadog-us5-到底是哪里">二、Datadog US5 到底是哪里</h2>
+<p><code>us5</code> 不是&quot;美国第五个机房&quot;这种意思，它是 Datadog 的<strong>站点代号</strong>。 Datadog 把 SaaS 分成若干独立站点，各自有独立的数据存储和访问域名：</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>站点</th><th>域名后缀</th><th>底层云</th></tr></thead>
+<tbody>
+<tr><td>US1</td><td><code>datadoghq.com</code></td><td>AWS</td></tr>
+<tr><td>US3</td><td><code>us3.datadoghq.com</code></td><td>Azure</td></tr>
+<tr><td><strong>US5</strong></td><td><strong><code>us5.datadoghq.com</code></strong></td><td><strong>Google Cloud</strong></td></tr>
+<tr><td>EU1</td><td><code>datadoghq.eu</code></td><td>AWS，欧洲</td></tr>
+<tr><td>AP1</td><td><code>ap1.datadoghq.com</code></td><td>AWS，日本</td></tr>
+<tr><td>AP2</td><td><code>ap2.datadoghq.com</code></td><td>AWS，澳洲</td></tr>
+</tbody></table></div>
+<p>Claude Code 里<strong>六个站点的域名都在</strong>（浏览器 SDK 会把整张站点表打进包里）， 但<strong>实际使用的是 US5</strong> —— 因为硬编码的那条完整 URL 指向它。</p>
+<p>可以自己确认落地位置：</p>
+<pre><code class="language-bash"># 真实解析（绕过本机可能存在的 fake-ip 改写）
+curl -s -H &#x27;accept: application/dns-json&#x27; \
+  &#x27;https://cloudflare-dns.com/dns-query?name=http-intake.logs.us5.datadoghq.com&amp;type=A&#x27;
+
+# 查这个地址属于谁（Team Cymru 的 DNS 接口，读 BGP 全表，不要 key）
+# 把 a.b.c.d 反过来拼在 origin.asn.cymru.com 前面
+dig +short TXT &lt;d&gt;.&lt;c&gt;.&lt;b&gt;.&lt;a&gt;.origin.asn.cymru.com</code></pre>
+<p>实测解析结果落在 Google Cloud 的地址段里，与&quot;US5 跑在 GCP 上&quot;一致。</p>
+<p>本仓的 <code>cem probe</code> 会自动做这两步，输出在「解析对账」和「实时连接」里。</p>
+<hr class="anth-divider">
+<h2 id="二点五一条命令看全部字段">二点五、一条命令看全部字段</h2>
+<pre><code class="language-bash">python3 -m cem telemetry              # 人读
+python3 -m cem telemetry --all-events # 连 182 个事件名一起列
+python3 -m cem telemetry --json       # 机读</code></pre>
+<p>它从<strong>你本机安装的那个版本</strong>里现读，不是一份写死的清单 —— 写死的清单过两个版本就是错的，而且没人知道它错了。</p>
+<p>几个直接读得出来的结论：</p>
+<ul><li><code>hostname</code> 是硬编码的字符串 <code>&quot;claude-code&quot;</code>，<strong>不会上报你的真实主机名</strong></li><li><code>head_sha</code> 会上报当前 git HEAD 的 commit sha</li><li>有个函数叫 <code>stripPiiFieldsForDatadog</code> —— 上报前会主动剥离 PII 字段</li><li>事件名有白名单，不在名单里的事件发不出去</li></ul>
+<p>边界见 <a href="06-toolbox.html">06-toolbox.md</a>：静态提取只能知道「会发哪些字段」， 不知道「某一次具体发了什么值」。</p>
+<h2 id="三cli-里的硬编码证据">三、CLI 里的硬编码证据</h2>
+<pre><code class="language-bash">BIN=~/.local/share/claude/versions/$(ls -t ~/.local/share/claude/versions | head -1)
+strings -a &quot;$BIN&quot; | grep -oE &#x27;.{120}us5\.datadoghq\.com.{120}&#x27;</code></pre>
+<p>会看到类似这样一段（片段，字段名可能随版本变化）：</p>
+<pre><code>… jed=&quot;https://http-intake.logs.us5.datadoghq.com/api/v2/logs&quot;,
+   oNo=&quot;pubea…5bc&quot;,   ← Datadog 的公开 client token
+   bI_=15000,         ← 攒批间隔，毫秒
+   SI_=100,           ← 一批最多多少条
+   … CLAUDE_CODE_DATADOG_FLUSH_INTERVAL_MS …</code></pre>
+<p>三个可以直接读出来的事实：</p>
+<ol><li>走的是 Datadog 的 <strong>v2 日志接入接口</strong>，不是 metrics、不是 trace。</li><li>默认<strong>每 15 秒攒一批发一次</strong>，一批上限 100 条。 环境变量 <code>CLAUDE_CODE_DATADOG_FLUSH_INTERVAL_MS</code> 可以改这个间隔。</li><li>那个 <code>pub…</code> 是 Datadog 的 <strong>client token</strong>（前缀就是 <code>pub</code>）， 设计上就是要放进客户端的公开凭据，只能写入、不能读别人的数据。 这里故意只写前后几位 —— 想看完整值自己跑上面那条命令， 把别人的凭据抄进文档没有意义。</li></ol>
+<p><strong>它上报什么内容？</strong> 这一点静态字符串答不了，本仓也不去解密 TLS 去看。 Anthropic 的隐私文档是唯一权威说明。这个工具只回答<strong>流量去了哪个地区、 走了哪条路、多久一次</strong>，不声称知道包里写了什么 —— 这条边界要画清楚。</p>
+<hr class="anth-divider">
+<h2 id="四怎么关">四、怎么关</h2>
+<h3 id="claude-code">Claude Code</h3>
+<p>相关环境变量（都是从 CLI 二进制里抽出来的，可自行 <code>strings</code> 确认）：</p>
+<pre><code class="language-bash"># 关掉非必要出网。范围最大的一个开关。
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+# 单独关错误上报（Sentry）
+export DISABLE_ERROR_REPORTING=1
+
+# 单独关遥测
+export DISABLE_TELEMETRY=1
+
+# 关自动更新检查（会打 releases.claude.com）
+export DISABLE_AUTOUPDATER=1
+
+# 改 Datadog 攒批间隔（不是关，是放缓）
+export CLAUDE_CODE_DATADOG_FLUSH_INTERVAL_MS=60000</code></pre>
+<p>想确认到底关掉没有，<strong>别只看环境变量，看连接</strong>：</p>
+<pre><code class="language-bash">python3 -m cem probe            # 「此刻的连接」那一节</code></pre>
+<p>如果关了之后 <code>lsof</code> 里再也不出现指向 Datadog / Sentry 的连接， 那就是真的关了。这比读文档可靠。</p>
+<p>另外，CLI 也支持把遥测导到<strong>你自己的</strong> OpenTelemetry 收集器 —— 二进制里 有整套 <code>OTEL_EXPORTER_OTLP_*</code> 变量和 <code>CLAUDE_CODE_ENABLE_TELEMETRY</code>。 企业环境里这通常比&quot;全关掉&quot;更实用：数据留在自己的收集器里。</p>
+<h3 id="桌面端-网页端">桌面端 / 网页端</h3>
+<p>桌面端和网页端的遥测由应用内部控制，没有环境变量入口。 能做的是在网络层拦：</p>
+<ul><li>在分流器（Clash / Surge / sing-box）里给 <code>*-intake-*.datadoghq.com</code>、<code>*.ingest.us.sentry.io</code> 配 <code>REJECT</code>；</li><li>或者在 DNS 层拦这两组域名。</li></ul>
+<p>拦掉之后本仓的探测会把它们显示成&quot;不可达&quot;，正好可以用来验证规则生效了。</p>
+<p><strong>别拦 <code>api.anthropic.com</code> 那一组</strong> —— 那是业务主干，拦掉就没法用了。</p>
+<hr class="anth-divider">
+<h2 id="五为什么这件事值得关心">五、为什么这件事值得关心</h2>
+<p>三个具体理由，不是&quot;隐私&quot;两个字：</p>
+<ol><li><strong>遥测和业务流量可能走不同的出口。</strong> 业务流量走你精心挑的节点， 遥测顺着默认规则从另一个地区出去，这在分流配置里非常常见 —— 而这两条链路都带着能关联到你的信息。</li><li><strong>遥测落地区域是合规问题。</strong> 数据发到美国的 Datadog， 在某些组织的规定里需要显式说明。含糊过去不行， 所以要有一张写得出站点代号的表。</li><li><strong>拦错了会静默降级。</strong> 一刀切拦 <code>*.anthropic.com</code> 会连特性开关一起 拦掉，表现是&quot;某些功能莫名其妙没有了&quot;，很难查。 所以要分清哪条是遥测、哪条是控制面、哪条是业务。</li></ol>
+      <div class="chapter__nav"><a class="anth-link" href="01-endpoints.html">← 出网域名</a><a class="anth-link" href="03-routing.html">出口为什么不同 →</a></div>
+    </article>
+  </div>
+</main>
+<footer class="anth-footer">
+  <div class="anth-footer-grid">
+    <div class="anth-footer-group"><h5>原理</h5><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a></div>
+    <div class="anth-footer-group"><h5>动手</h5><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+    <div class="anth-footer-group"><h5>仓库</h5>
+      <a href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">源码</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">参与维护</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可</a>
+    </div>
+    <div class="anth-footer-group"><h5>看一眼</h5>
+      <a href="demo.html">成品界面</a>
+      <a href="architecture.html">架构与设计</a>
+      <a href="index.html">首页</a>
+    </div>
+  </div>
+  <div class="anth-footer-legal">
+    全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址 ·
+    文档与截图中的地址取自 RFC 5737 文档保留段
+  </div>
+</footer>
+</body>
+</html>

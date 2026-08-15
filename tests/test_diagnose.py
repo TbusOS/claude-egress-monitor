@@ -275,6 +275,78 @@ class TestPathTrace(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIsNone(report.end_to_end_loss)
 
+    # ── 终点不回 ICMP ≠ 丢包 100% ────────────────────────────────────────
+    SILENT = """{"report":{"mtr":{"src":"a","dst":"claude.ai"},"hubs":[
+      {"count":1,"host":"192.0.2.1","Loss%":0.0,"Snt":5,"Best":1.0,"Avg":1.2,"Wrst":2.0,"StDev":0.3},
+      {"count":2,"host":"???","Loss%":100.0,"Snt":5,"Best":0.0,"Avg":0.0,"Wrst":0.0,"StDev":0.0}
+    ]}}"""
+
+    def _silent_report(self):
+        return pathtrace.PathReport(
+            target="claude.ai", ok=True,
+            hops=pathtrace.parse_mtr_json(self.SILENT),
+            resolved="203.0.113.9")
+
+    def test_silent_endpoint_is_not_reported_as_loss(self):
+        """终点一个包都没回 → 丢包率**量不出来**，不是 100%。
+
+        这是这个面板最容易给错的一条结论，而错的方向是让人去换节点 ——
+        换完还是 100%，因为主机本来就不回 ICMP。
+        """
+        report = self._silent_report()
+        self.assertTrue(report.endpoint_silent)
+        self.assertIsNone(report.end_to_end_loss)
+        self.assertIsNone(report.jitter_ms)
+
+    def test_silent_endpoint_does_not_report_zero_latency(self):
+        """mtr 对没回包的跳填 0.0。原样透出去就是"往返 0 毫秒"。"""
+        out = pathtrace.summarize(self._silent_report())
+        self.assertIsNone(out["final_avg_ms"])
+        self.assertIsNone(out["hops"][1]["avg_ms"])
+        self.assertFalse(out["hops"][1]["answered"])
+        # 原始的 100% 仍然留在那一跳上，不隐瞒
+        self.assertEqual(out["hops"][1]["loss_pct"], 100.0)
+
+    def test_last_answering_hop_bounds_what_is_known(self):
+        report = self._silent_report()
+        self.assertEqual(report.last_answering.index, 1)
+
+    def test_answering_endpoint_still_reports_loss(self):
+        """终点会回包时，丢包率照常给 —— 不能因为修了上面那条就把真丢包也吞了。"""
+        report = pathtrace.PathReport(
+            target="x", ok=True, hops=pathtrace.parse_mtr_json(self.MTR))
+        self.assertFalse(report.endpoint_silent)
+        self.assertEqual(report.end_to_end_loss, 0.0)
+
+    def test_resolved_kind_flags_fake_ip(self):
+        """打向 fake-ip 占位地址时，整份报告的读法都得改。"""
+        fake = pathtrace.PathReport(target="claude.ai", ok=True,
+                                    resolved="198.18.0.42")
+        self.assertEqual(fake.resolved_kind, "fake-ip")
+        # 这里不能用 RFC 5737 的文档段：203.0.113.0/24 在 IANA 特殊用途
+        # 注册表里，Python 的 is_private 对它返回 True。要一个真的公网地址
+        # 才能测出 "real" 这一档，用众所周知的公共解析器地址，不含本机信息。
+        real = pathtrace.PathReport(target="claude.ai", ok=True,
+                                    resolved="1.1.1.1")
+        self.assertEqual(real.resolved_kind, "real")
+        unknown = pathtrace.PathReport(target="claude.ai", ok=True)
+        self.assertEqual(unknown.resolved_kind, "unknown")
+
+    def test_cgnat_hop_is_marked_not_public(self):
+        """100.64/10 是共享地址段，Python 标准库不认它是私有地址。
+
+        它在 traceroute 前几跳里极其常见（运营商 NAT、Tailscale）。
+        当成公网地址会让人以为"已经出了自己的网络"。
+        """
+        hop = pathtrace.Hop(index=1, host="100.64.0.1", loss_pct=0.0,
+                            sent=5, avg_ms=12.0, best_ms=11.0, worst_ms=13.0,
+                            stdev_ms=0.5)
+        self.assertTrue(hop.is_private)
+        public = pathtrace.Hop(index=2, host="1.1.1.1", loss_pct=0.0,
+                               sent=5, avg_ms=80.0, best_ms=79.0,
+                               worst_ms=82.0, stdev_ms=1.0)
+        self.assertFalse(public.is_private)
+
 
 class TestTelemetryExtraction(unittest.TestCase):
     # 一段仿造的 bundle 片段，形状照着真实的来，但内容是编的。

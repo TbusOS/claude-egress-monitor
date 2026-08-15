@@ -358,6 +358,28 @@ def stability_rows(samples: tuple[Sample, ...],
     return out
 
 
+MTR_MISSING_HINT = (
+    "未安装 mtr。跑 scripts/install-deps.sh 安装 —— "
+    "它补的是四段延迟答不了的那个维度："
+    "TLS 忽快忽慢是距离远还是链路在丢包。"
+)
+
+
+def path_panel(watcher) -> dict:
+    """路径质量面板：一次给出开关状态和全部目标的最新结果。
+
+    整个面板只有这一个接口 —— 界面不需要知道结果是自动循环跑出来的
+    还是手点出来的，两者形状一样。
+    """
+    status = watcher.status()
+    return {
+        "status": status,
+        "available": status.get("available", False),
+        "hint": None if status.get("available") else MTR_MISSING_HINT,
+        "rows": watcher.results(),
+    }
+
+
 def telemetry_payload() -> dict:
     """遥测字段的静态提取结果。见 cem/telemetry.py 的边界说明。"""
     from . import telemetry as tele
@@ -472,6 +494,7 @@ __all__ = [
     "SEVERITY_LABEL",
     "check_rows",
     "day_payload",
+    "path_panel",
     "telemetry_payload",
     "finding_rows",
     "stability_rows",

@@ -34,6 +34,17 @@ FAKE_IP_NETS = (
     ipaddress.ip_network("240.0.0.0/4"),
 )
 
+# 共享地址段（RFC 6598，100.64.0.0/10）。**Python 标准库不把它算作私有地址**
+# —— `ipaddress.IPv4Address("100.64.0.1").is_private` 是 False。但它确实不是
+# 公网地址：运营商级 NAT（CGNAT）和 Tailscale 都用它。
+#
+# 为什么必须单独认出来：这个段在 traceroute 的前几跳里极其常见。把它当公网
+# 地址会有两个后果 —— 拿去查 ASN 归属会得到一个毫无意义的答案，以及让人
+# 以为"已经出了自己的网络"，而实际上还在运营商或隧道的 NAT 里面。
+SHARED_NETS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+)
+
 DOH_SOURCES = (
     ("cloudflare", "https://cloudflare-dns.com/dns-query?name={host}&type={rr}"),
     ("google", "https://dns.google/resolve?name={host}&type={rr}"),
@@ -48,13 +59,29 @@ def is_fake_ip(ip: str) -> bool:
     return any(addr in net for net in FAKE_IP_NETS)
 
 
-def is_private(ip: str) -> bool:
+def is_shared_cgnat(ip: str) -> bool:
+    """RFC 6598 共享地址段。见 SHARED_NETS 的说明。"""
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return (addr.is_private or addr.is_loopback or addr.is_link_local) \
-        and not is_fake_ip(ip)
+    return any(addr in net for net in SHARED_NETS)
+
+
+def is_private(ip: str) -> bool:
+    """不是公网地址：内网、回环、链路本地，加上 CGNAT 共享段。
+
+    fake-ip 排除在外 —— 它单独一档，因为它连"地址"都算不上，
+    只是分流器发给本机的一个标签。
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if is_fake_ip(ip):
+        return False
+    return (addr.is_private or addr.is_loopback or addr.is_link_local
+            or is_shared_cgnat(ip))
 
 
 def system_resolve(host: str, timeout: float = 4.0) -> tuple[str, ...]:
@@ -242,11 +269,13 @@ def fake_ip_reverse_map(hosts: tuple[str, ...]) -> dict[str, str]:
 
 __all__ = [
     "FAKE_IP_NETS",
+    "SHARED_NETS",
     "classify",
     "doh_resolve",
     "fake_ip_reverse_map",
     "is_fake_ip",
     "is_private",
+    "is_shared_cgnat",
     "parse_doh",
     "parse_scutil_dns",
     "read_scutil_dns",

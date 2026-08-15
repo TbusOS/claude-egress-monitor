@@ -19,9 +19,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
+from . import endpoints as ep
 from . import history as histmod
 from . import view
 from .model import Sample
+from .pathwatch import MAX_INTERVAL_S, MIN_INTERVAL_S, PathWatcher
 from .sampler import Sampler, clamp_interval
 from .store import History
 
@@ -88,6 +90,7 @@ class _Handler(BaseHTTPRequestHandler):
     bus: Broadcaster
     web_root: Path
     day_store: object
+    pathwatch: PathWatcher
 
     def log_message(self, fmt: str, *args) -> None:      # noqa: A003
         """默认的 stderr 访问日志会把每次 SSE 心跳都刷出来，关掉。"""
@@ -107,12 +110,23 @@ class _Handler(BaseHTTPRequestHandler):
     def _send_error_json(self, status: int, message: str) -> None:
         self._send_json({"error": message}, status=status)
 
-    def _read_json(self) -> Optional[dict]:
+    def _drain_body(self) -> Optional[dict]:
+        """把请求体读干净，顺便解析成 JSON。见 do_POST 里的说明。"""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return None
-        if length <= 0 or length > MAX_BODY:
+        if length <= 0:
+            return None
+        if length > MAX_BODY:
+            # 超限的体也要读掉再拒绝，否则这条连接就废了。
+            # 分块丢弃而不是一次读进内存 —— 别人给多大就吃多大是个 DoS。
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
             return None
         try:
             raw = self.rfile.read(length)
@@ -120,6 +134,10 @@ class _Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             return None
         return data if isinstance(data, dict) else None
+
+    def _read_json(self) -> Optional[dict]:
+        """请求体。已经在 do_POST 里读完了，这里只是取出来。"""
+        return getattr(self, "_body", None)
 
     def _serve_static(self, rel: str) -> None:
         target = (self.web_root / rel.lstrip("/")).resolve()
@@ -153,6 +171,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(view.day_payload(self.day_store))
         elif path == "/api/day":
             self._day_detail()
+        elif path == "/api/path":
+            # 一遍要跑一两分钟，所以这里只读结果；跑是后台线程干的。
+            self._send_json(view.path_panel(self.pathwatch))
         elif path == "/api/telemetry":
             # 这一项要跑 strings 扫一个 300MB 的文件，比较慢，
             # 所以不塞进 /api/state，单独按需拉。
@@ -167,11 +188,24 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_error_json(404, "not found")
 
     def do_POST(self) -> None:                           # noqa: N802
+        # HTTP/1.1 是 keep-alive 的，所以**请求体必须读完**，哪怕这个路由
+        # 根本不需要它。没读完的字节留在 socket 里，会被当成下一个请求的
+        # 开头 —— 症状是下一次请求莫名其妙 501
+        # `Unsupported method ('{}GET')`，而且只在连接被复用时出现，
+        # 单独用 curl 打一次永远复现不了。
+        #
+        # 所以在这里统一读一次，路由自己不用管这件事 —— 靠每个路由记得读，
+        # 迟早会有一个忘掉，而这一类 bug 极难查。
+        self._body = self._drain_body()
         path = self.path.split("?", 1)[0]
         if path == "/api/monitor":
             self._monitor()
         elif path == "/api/days/delete":
             self._delete_days()
+        elif path == "/api/path/auto":
+            self._path_auto()
+        elif path == "/api/path/sweep":
+            self._send_json(self.pathwatch.sweep_soon())
         elif path == "/api/sample":
             sample = self.sampler.sample_now()
             self.bus.publish(view.snapshot(self.history, self.sampler,
@@ -212,6 +246,37 @@ class _Handler(BaseHTTPRequestHandler):
         self.bus.publish(view.snapshot(self.history, self.sampler,
                                        self.day_store))
         self._send_json(status)
+
+    def _path_auto(self) -> None:
+        """路径质量的自动探测开关。参数和 /api/monitor 一样的形状。"""
+        data = self._read_json()
+        if data is None:
+            self._send_error_json(400, "需要 JSON 请求体")
+            return
+        unknown = set(data) - {"enabled", "interval_s"}
+        if unknown:
+            self._send_error_json(400, f"不认识的字段：{', '.join(sorted(unknown))}")
+            return
+        interval = data.get("interval_s")
+        if interval is not None:
+            if not isinstance(interval, (int, float)) or isinstance(interval, bool):
+                self._send_error_json(400, "interval_s 必须是数字（秒）")
+                return
+            interval = max(MIN_INTERVAL_S, min(MAX_INTERVAL_S, int(interval)))
+        enabled = data.get("enabled")
+        if enabled is None:
+            if interval is None:
+                self._send_error_json(400, "至少要给 enabled 或 interval_s")
+                return
+            self._send_json(self.pathwatch.set_interval(interval))
+            return
+        if not isinstance(enabled, bool):
+            self._send_error_json(400, "enabled 必须是 true / false")
+            return
+        if enabled:
+            self._send_json(self.pathwatch.start(interval_s=interval))
+        else:
+            self._send_json(self.pathwatch.stop())
 
     def _day_detail(self) -> None:
         """某一天（或几天）的汇总。参数 ?day=YYYY-MM-DD，可重复。"""
@@ -303,9 +368,14 @@ def build_server(
     sampler: Optional[Sampler] = None,
     web_root: Path = WEB_ROOT,
     day_store=None,
+    pathwatch: Optional[PathWatcher] = None,
 ) -> tuple[ThreadingHTTPServer, Sampler, History, Broadcaster]:
     hist = history or History()
     bus = Broadcaster()
+    # 路径质量的目标 = Claude 的域名 + 对照组。对照组在这里是有用的：
+    # 到 1.1.1.1 的路径正常而到 Claude 的不正常，说明问题在后半段。
+    watcher = pathwatch or PathWatcher(
+        lambda: ep.claude_egress_hosts() + ("1.1.1.1",))
 
     def on_sample(_sample: Sample) -> None:
         bus.publish(view.snapshot(hist, smp, day_store))
@@ -316,7 +386,7 @@ def build_server(
 
     handler = type("Handler", (_Handler,), {
         "history": hist, "sampler": smp, "bus": bus, "web_root": web_root,
-        "day_store": day_store,
+        "day_store": day_store, "pathwatch": watcher,
     })
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

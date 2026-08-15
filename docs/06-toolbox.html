@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>检测手段清单：用了什么、为什么不用逆向工具 — claude-egress-monitor</title>
+<meta name="description" content="这份文档回答两个经常被问到的问题：要不要装别的工具才能测准， 以及要不要上逆向工具。">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/anthropic.css">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<nav class="anth-nav"><div class="anth-nav-inner">
+  <a class="brand" href="index.html">claude-egress-monitor</a>
+  <div class="nav-links"><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+  <div class="nav-side">
+    <a href="demo.html">Demo</a>
+    <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div></nav>
+<main class="chapter">
+  <div class="chapter__inner">
+    <aside class="chapter__toc">
+      <span class="chapter__toc-label">本页</span>
+      <a href="#一不装任何东西能测什么">一、不装任何东西能测什么</a><a href="#二装了会更准的可选">二、装了会更准的（可选）</a><a href="#三为什么不用逆向工具">三、为什么不用逆向工具</a><a href="#三点五证据源分层与置信度">三点五、证据源分层与置信度</a><a href="#四判断准不准每个结论都带判据">四、判断准不准：每个结论都带判据</a>
+    </aside>
+    <article class="chapter__body">
+      <span class="anth-badge">第 6 章 · 工具箱</span>
+      <h1 id="检测手段清单用了什么为什么不用逆向工具">检测手段清单：用了什么、为什么不用逆向工具</h1>
+<p>这份文档回答两个经常被问到的问题：<strong>要不要装别的工具才能测准</strong>， 以及<strong>要不要上逆向工具</strong>。</p>
+<hr class="anth-divider">
+<h2 id="一不装任何东西能测什么">一、不装任何东西能测什么</h2>
+<p>下面这些只用 Python 标准库 + macOS 自带的 <code>dig</code> / <code>lsof</code> / <code>scutil</code> / <code>ps</code>， <code>git clone</code> 完就能跑：</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>检测</th><th>手段</th><th>答什么</th></tr></thead>
+<tbody>
+<tr><td>出口 IP / 地区 / 边缘机房</td><td>向 Cloudflare 的 <code>cdn-cgi/trace</code> 发请求</td><td>目的地那侧看到的你是谁</td></tr>
+<tr><td>出口归属（ASN / 运营商）</td><td>Team Cymru 的 DNS 接口（读 BGP 全表）</td><td>这个地址属于谁的网络</td></tr>
+<tr><td>出口城市 / 时区</td><td>ip-api、ipinfo 免费额度</td><td>国家相同时，靠城市区分两个出口</td></tr>
+<tr><td>网段注册信息</td><td>RDAP（RIR 官方，IANA bootstrap 定位）</td><td>这个段是机构自有还是运营商分配</td></tr>
+<tr><td>是不是大厂机房</td><td>AWS / GCP / Cloudflare 等<strong>自己发布</strong>的地址段</td><td>确证级判定，非推断</td></tr>
+<tr><td>机房还是家宽</td><td>ip-api 的 <code>hosting</code> / <code>mobile</code> / <code>proxy</code> 标志 + 组织名 / rDNS 启发式</td><td>风控权重差别最大的属性</td></tr>
+<tr><td>反向解析</td><td><code>dig -x</code></td><td>机器叫什么名字，常直接暴露机房</td></tr>
+<tr><td>四段延迟</td><td>裸 socket + ssl，自己掐表</td><td>慢在 DNS / TCP / TLS / 服务端哪一段</td></tr>
+<tr><td>解析对账</td><td>本机 <code>getaddrinfo</code> vs 两个独立 DoH 源</td><td>本机 DNS 有没有被改写</td></tr>
+<tr><td>实时连接</td><td><code>lsof -nP -iTCP</code></td><td>Claude 的进程此刻连着谁</td></tr>
+<tr><td>TLS 证书</td><td>读握手拿到的证书公开字段</td><td>有没有中间人在拆 TLS</td></tr>
+<tr><td>时钟偏移</td><td><code>cdn-cgi/trace</code> 的 <code>ts=</code> 对比本机时间</td><td>时钟不准会让 TLS 莫名失败</td></tr>
+<tr><td>IPv6 可达性</td><td>向 Cloudflare 的 v6 地址建 TCP</td><td>出口在 v4/v6 之间跳是不是双栈造成的</td></tr>
+<tr><td>代理端口存活</td><td>连一下系统代理端口</td><td>「代理配着但进程挂了」这种最难查的故障</td></tr>
+<tr><td>遥测字段</td><td><code>strings</code> 读 Claude Code 的 JS bundle</td><td>遥测<strong>会</strong>上报哪些字段</td></tr>
+</tbody></table></div>
+<hr class="anth-divider">
+<h2 id="二装了会更准的可选">二、装了会更准的（可选）</h2>
+<p>一键装：</p>
+<pre><code class="language-bash">bash scripts/install-deps.sh          # 先看缺什么
+bash scripts/install-deps.sh --dry-run  # 只检查不安装</code></pre>
+<h3 id="mtr-唯一真正补上一个维度的工具"><code>mtr</code> —— 唯一真正补上一个维度的工具</h3>
+<p>没有它，有一类问题答不了：<strong>TLS 握手忽快忽慢，是距离远还是链路在丢包？</strong> 四段延迟只能告诉你「TLS 这一段耗了 193 毫秒」，答不了那 193 毫秒里 有多少是重传。</p>
+<p>装了之后多出来：跳数、每跳延迟、<strong>端到端丢包率</strong>、抖动。</p>
+<p>两个使用上的坑，工具里已经处理了，但值得知道：</p>
+<ol><li><strong>中间跳的丢包大多是假的。</strong> 很多路由器给 ICMP TTL-exceeded 做限速， 于是显示丢包但转发流量完全正常。真正算数的是<strong>最后一跳</strong>的丢包。 看到中间某跳 40% 丢包就去换节点，换了也没用。</li><li><strong>macOS 上 <code>mtr</code> 需要 root 才能发 ICMP。</strong> 要么每次 <code>sudo mtr</code>， 要么给它 setuid。本工具默认按普通用户调用 —— 一个监控工具不该 要求你用 sudo 跑它自己。所以没给权限时这一块显示&quot;权限不足&quot;， 这是预期行为。</li></ol>
+<h3 id="jq"><code>jq</code></h3>
+<p>纯粹是手工处理 <code>cem probe --json</code> 输出时方便，工具本身不用它。</p>
+<hr class="anth-divider">
+<h2 id="三为什么不用逆向工具">三、为什么不用逆向工具</h2>
+<p>先分清两件完全不同的事。</p>
+<h3 id="读字符串不是逆向也没有副作用">「读字符串」不是逆向，也没有副作用</h3>
+<p>本仓的 <code>cem telemetry</code> 做的是：对一个<strong>已经在你硬盘上</strong>的文件跑 <code>strings</code>， 读里面的明文。</p>
+<ul><li>不修改任何文件</li><li>不注入任何进程</li><li>不改变程序行为</li><li>不解密任何流量</li></ul>
+<p>Claude Code 发行为单文件 JS bundle，没有加密、没有混淆到不可读， 构造上报内容的那段代码本来就是明文。所以这一步的收益极高而代价为零。</p>
+<p>它能读出来的东西比想象中多：接入点 URL、client token、攒批间隔、 信封字段的固定值（比如 <code>hostname</code> 是写死的 <code>&quot;claude-code&quot;</code>， <strong>不会上报你的真实主机名</strong>）、业务字段名、182 个事件名的白名单， 以及几个函数名本身透露的行为（<code>stripPiiFieldsForDatadog</code> —— 上报前会主动剥离 PII 字段）。</p>
+<h3 id="真正的逆向工具在这个问题上派不上用场">真正的逆向工具在这个问题上派不上用场</h3>
+<p>IDA / Ghidra / Frida 解决的是「<strong>这个二进制在算什么</strong>」。 而本仓要回答的是「<strong>流量去哪</strong>」—— 答案在链路上和系统状态里，不在二进制里。</p>
+<p>出口 IP 不写在代码里，它是运行时由你的分流规则决定的。 把 bundle 完整反编译出来也读不到那个答案。</p>
+<h3 id="唯一需要解密的场景以及它的代价">唯一需要解密的场景，以及它的代价</h3>
+<p>想知道「某一次<strong>具体</strong>发了什么值」（不是「会发哪些字段」）， 就必须解密 TLS。做法是起一个本地 mitm 代理 + 装一个根 CA， 让 Claude Code 信任它。</p>
+<p>技术上完全可行，Node 对此很友好。但代价是实的：</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>代价</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><strong>要装根 CA</strong></td><td>那个 CA 的私钥一旦泄露，你机器上<strong>所有</strong> HTTPS 都能被解密。这是真实风险，不是理论风险</td></tr>
+<tr><td><strong>工具性质变了</strong></td><td>从「只读观测」变成「中间人」。之后出的任何网络异常，都无法排除是这个工具自己造成的</td></tr>
+<tr><td><strong>和本仓的承诺冲突</strong></td><td><code>docs/05-privacy.md</code> 明确写了不解密、不抓包</td></tr>
+</tbody></table></div>
+<p>所以本仓<strong>不做，也不提供做这件事的工具</strong>。</p>
+<p>如果你确实需要，用现成的 mitmproxy 更合适 —— 它是专门做这件事的， 文档齐全，也把风险讲得比我清楚。但请在一台专门的测试机上做， 别在日常机器上装那个 CA。</p>
+<h3 id="其他形式的逆向副作用一并列出">其他形式的逆向，副作用一并列出</h3>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>手段</th><th>副作用</th></tr></thead>
+<tbody>
+<tr><td>Frida 注入运行中的进程</td><td>需要调试权限；改变了程序行为，之后任何异常都无法判断是不是自己搞出来的</td></tr>
+<tr><td>反编译 / 修改二进制</td><td>多数服务条款明确禁止逆向工程；分发修改后的二进制有法律风险</td></tr>
+<tr><td>抓包（tcpdump / Wireshark）</td><td>需要 root；能看到 SNI 和目的地，但看不到加密内容 —— 而 SNI 和目的地本工具已经有了，且不需要 root</td></tr>
+</tbody></table></div>
+<hr class="anth-divider">
+<h2 id="三点五证据源分层与置信度">三点五、证据源分层与置信度</h2>
+<p>工具用的每个证据源可信度差得很远，所以<strong>结论上会标出这条判断有多硬</strong>：</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>置信度</th><th>什么时候给这一档</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td><strong>确证</strong></td><td>权威来源<strong>直接说的</strong>，不是判断</td><td>命中 AWS / GCP / Cloudflare <strong>自己发布</strong>的地址段</td></tr>
+<tr><td><strong>较可能</strong></td><td>第三方数据源的判断，通常准</td><td>ip-api 的 <code>hosting</code> / <code>mobile</code> 标志</td></tr>
+<tr><td><strong>推测</strong></td><td>只有单一弱线索</td><td>组织名里有 &quot;cloud&quot;、rDNS 形态像机房</td></tr>
+<tr><td><strong>判不出</strong></td><td>什么线索都没有</td><td>数据源没给标志，组织名和 rDNS 也看不出来</td></tr>
+</tbody></table></div>
+<h3 id="厂商官方-ip-段确证级免费无限制">厂商官方 IP 段（确证级，免费无限制）</h3>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>厂商</th><th>地址</th></tr></thead>
+<tbody>
+<tr><td>AWS</td><td><code>ip-ranges.amazonaws.com/ip-ranges.json</code></td></tr>
+<tr><td>Google Cloud</td><td><code>gstatic.com/ipranges/cloud.json</code></td></tr>
+<tr><td>Cloudflare</td><td><code>cloudflare.com/ips-v4</code> · <code>ips-v6</code></td></tr>
+<tr><td>DigitalOcean</td><td><code>digitalocean.com/geo/google.csv</code></td></tr>
+<tr><td>Oracle Cloud</td><td><code>docs.oracle.com/.../public_ip_ranges.json</code></td></tr>
+</tbody></table></div>
+<p>实测收录约 <strong>2 万个前缀</strong>，拉一遍 4 秒。缓存 24 小时，界面上显示拉取时间， 可手动刷新 —— 与其猜多久合适，不如把新鲜度摆出来让人自己判断。</p>
+<p><strong>命中 = 一定是机房；没命中 ≠ 一定不是机房。</strong> 这里只覆盖几家大厂， 小机房、国内 IDC、住宅代理服务商都不在名单里。所以&quot;没命中&quot;只能降级到 别的证据源，不能当成&quot;这是家宽&quot;。</p>
+<p>用它验证过一个之前只是推测的结论：Datadog US5 的 <code>34.149.66.165</code> 命中 <strong>Google Cloud 34.149.0.0/16</strong> —— &quot;US5 跑在 GCP 上&quot;从推测变成确证。</p>
+<h3 id="其他免费源">其他免费源</h3>
+<ul><li><strong>RDAP</strong>（IETF 标准，RIR 官方，免费无限制）—— <strong>已接入</strong>。 返回结构化 JSON，带网段名、分配类型、备注、abuse 联系人。 分配注册时写的，比第三方推断硬一档，但不到确证（登记可能陈旧， 各 RIR 命名习惯不同）。</li></ul>
+<p>实测的两种典型值，含义差别很大：</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>类型</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>DIRECT ALLOCATION</code></td><td>机构<strong>直接从注册局</strong>拿的段，通常是自有网络（Google、Anthropic 都是这种）</td></tr>
+<tr><td><code>ALLOCATED NON-PORTABLE</code></td><td>运营商分配给客户的段，不可携带 —— 更像宽带线路</td></tr>
+</tbody></table></div>
+<p><strong>必须用 IANA bootstrap 定位该查哪个 RIR，不能挨个试。</strong> RIR 对不归自己管的段返回的是<strong>占位记录</strong>而不是 404：拿 APNIC 查一个 美国地址会得到 <code>IANA-NETBLOCK-34</code> + &quot;not allocated to APNIC&quot;， 有 name 有 type，看起来完全像一条有效答案。照单全收就等于给出错误的 注册信息 —— 一个看起来正常的错误答案比报错糟糕得多。</p>
+<ul><li><strong>Team Cymru DNS</strong>（已用）：读 BGP 全表，ASN 的权威来源。</li><li><strong>开源离线数据集</strong>：<code>sapics/ip-location-db</code>（CC0/MIT）、<code>ipverse/asn-ip</code>、 <code>X4BNet/lists_vpn</code>。适合完全离线跑，代价是数据没有实时源新。</li></ul>
+<h3 id="一个数据源给不了的东西住宅-vs-企业">一个数据源给不了的东西：住宅 vs 企业</h3>
+<p>免费数据源给的是 <code>hosting</code> 这<strong>一个布尔值</strong>——只区分&quot;是不是机房&quot;， <strong>没有住宅 vs 企业的维度</strong>。家里的宽带和公司办公室的宽带在这里是同一类。</p>
+<p>所以工具里这一档叫 <strong><code>non-datacenter</code>（非机房宽带）</strong>而不是 <code>residential</code>—— 叫 residential 是在宣称一个数据源给不了的结论。要真分开得靠付费数据源 （IPinfo Privacy Detection、IP2Location <code>usage_type</code>、MaxMind GeoIP2 ISP）。</p>
+<h2 id="四判断准不准每个结论都带判据">四、判断准不准：每个结论都带判据</h2>
+<p>工具里所有分类结论都带一行「判据」，说明它是怎么得出来的。这不是装饰：</p>
+<ul><li>「机房还是家宽」有两级判据 —— 数据源的标志位（准）和组织名 / rDNS 启发式（不太准）。界面上会说明用的是哪一级。</li><li>判不出来时显示<strong>「判不出来」</strong>而不是猜一个。原因是猜错的方向不对称： 把机房猜成家宽，会让人以为风险比实际更低。</li><li>「动态还是静态 IP」<strong>单次观测答不了</strong>，只能靠观测时长 + 变更次数推断， 所以结论一定带着观测窗口。观测不足 6 小时就明说「还判断不了」， 而不是给一个看起来很确定的答案。</li></ul>
+      <div class="chapter__nav"><a class="anth-link" href="05-privacy.html">← 隐私边界</a><a class="anth-link" href="07-datasources.html">数据源 →</a></div>
+    </article>
+  </div>
+</main>
+<footer class="anth-footer">
+  <div class="anth-footer-grid">
+    <div class="anth-footer-group"><h5>原理</h5><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a></div>
+    <div class="anth-footer-group"><h5>动手</h5><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+    <div class="anth-footer-group"><h5>仓库</h5>
+      <a href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">源码</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">参与维护</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可</a>
+    </div>
+    <div class="anth-footer-group"><h5>看一眼</h5>
+      <a href="demo.html">成品界面</a>
+      <a href="architecture.html">架构与设计</a>
+      <a href="index.html">首页</a>
+    </div>
+  </div>
+  <div class="anth-footer-legal">
+    全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址 ·
+    文档与截图中的地址取自 RFC 5737 文档保留段
+  </div>
+</footer>
+</body>
+</html>

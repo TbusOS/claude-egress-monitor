@@ -1,0 +1,18 @@
+/* Atelier Design — web fonts
+ * Plus Jakarta Sans: the UI + display face. Chosen deliberately — it is an
+ * Indonesian typeface (Tokotype, commissioned for Jakarta's city identity),
+ * and the aesthetic this skill reconstructs comes out of Yogyakarta. It also
+ * happens to be the right shape: geometric skeleton, humanist terminals,
+ * true tabular figures for KPI rows.
+ * JetBrains Mono: record IDs, codes, timestamps only — never body copy.
+ * Noto Sans SC: Chinese fallback (see references/typography.md §H).
+ *
+ * 本仓对 skill 原文件做了**一处**改动：display=swap → display=optional。
+ * 理由有两条，实测过：
+ * 1. swap 会在字体到达后重排整页，渲染闸量到 CLS 0.21（阈值 0.1）。
+ *    optional 表示"字体没在 ~100ms 内就绪就整页保持后备字体"，不再回流。
+ * 2. 这个工具的使用者都在代理后面，Google Fonts 经常被拦。swap 之下
+ *    那是一次迟到的跳变，optional 之下就是干净地用后备字体。
+ * 代价：首次访问可能看不到 Plus Jakarta Sans，缓存之后正常。
+ */
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=optional");

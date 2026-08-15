@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>为什么三个入口的出口可以不一样 — claude-egress-monitor</title>
+<meta name="description" content="这是整个工具存在的理由，值得单独一份文档。">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/anthropic.css">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<nav class="anth-nav"><div class="anth-nav-inner">
+  <a class="brand" href="index.html">claude-egress-monitor</a>
+  <div class="nav-links"><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+  <div class="nav-side">
+    <a href="demo.html">Demo</a>
+    <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div></nav>
+<main class="chapter">
+  <div class="chapter__inner">
+    <aside class="chapter__toc">
+      <span class="chapter__toc-label">本页</span>
+      <a href="#一根源三个入口读的不是同一份代理配置">一、根源：三个入口读的不是同一份代理配置</a><a href="#二这个工具怎么测">二、这个工具怎么测</a><a href="#三三个会让人得出错误结论的陷阱">三、三个会让人得出错误结论的陷阱</a><a href="#四补上第三个陷阱读分流器自己的连接表">四、补上第三个陷阱：读分流器自己的连接表</a><a href="#五把配置改成一致的">五、把配置改成一致的</a><a href="#六受限地区">六、受限地区</a>
+    </aside>
+    <article class="chapter__body">
+      <span class="anth-badge">第 3 章 · 出口为什么不同</span>
+      <h1 id="为什么三个入口的出口可以不一样">为什么三个入口的出口可以不一样</h1>
+<p>这是整个工具存在的理由，值得单独一份文档。</p>
+<hr class="anth-divider">
+<h2 id="一根源三个入口读的不是同一份代理配置">一、根源：三个入口读的不是同一份代理配置</h2>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>入口</th><th>读什么</th><th>匹配依据</th></tr></thead>
+<tbody>
+<tr><td><strong>Claude Code</strong>（CLI，Node 运行时）</td><td>只认 <code>HTTPS_PROXY</code> / <code>HTTP_PROXY</code> 环境变量。没设就直连</td><td>直连时如果本机有 TUN / 透明代理，分流器<strong>按 IP</strong> 匹配规则</td></tr>
+<tr><td><strong>Claude 桌面端</strong>（Electron / Chromium）</td><td>认<strong>操作系统的代理设置</strong></td><td>通过 HTTP <code>CONNECT</code> 把域名交给代理，分流器<strong>按域名</strong>匹配规则</td></tr>
+<tr><td><strong>浏览器里的 claude.ai</strong></td><td>认系统代理，除非装了代理插件自己接管</td><td>同上；插件可以单独改写</td></tr>
+</tbody></table></div>
+<p>Node 默认<strong>不读系统代理</strong>。这一条是所有困惑的起点： 你在系统设置里配好了代理，桌面端立刻生效，而 Claude Code 完全不知道它的存在。</p>
+<p>&quot;按 IP 匹配&quot;和&quot;按域名匹配&quot;是两个不同的匹配过程，命中的规则可以不同。 于是同一个域名，从 CLI 出去和从桌面端出去，<strong>落地国家可以不一样</strong>。</p>
+<hr class="anth-divider">
+<h2 id="二这个工具怎么测">二、这个工具怎么测</h2>
+<p>对每个入口造一条<strong>等价探测路径</strong>：用和该入口完全相同的代理配置， 去问目的地的 <code>cdn-cgi/trace</code>（见 <a href="01-endpoints.html">01-endpoints.md</a> 第三节）。 目的地返回的 <code>ip=</code> 就是该入口真实的出口地址 —— 不是本机接口地址， 也不是猜的。</p>
+<ul><li>CLI 路径：按 <code>HTTPS_PROXY</code> 是否存在，走代理或直连；</li><li>桌面端 / 网页路径：走系统代理（读 <code>scutil --proxy</code>）， 用真正的 HTTP <code>CONNECT</code> 建隧道，DNS 交给代理做 —— 和 Chromium 一样；</li><li>对照路径：强制不用任何代理。</li></ul>
+<pre><code class="language-bash">python3 -m cem doctor     # 先看清本机有哪几条路径
+python3 -m cem probe      # 再量每条路径的出口</code></pre>
+<h3 id="系统代理是-pac-脚本时">系统代理是 PAC 脚本时</h3>
+<p>PAC（自动配置脚本）对每个 URL 可以返回不同的代理，<strong>不存在&quot;一个&quot;代理</strong>。 本工具检测到 PAC 时退回直连并在输出里说明，结论仅供参考 —— 硬凑一个数字比说不知道更糟。</p>
+<hr class="anth-divider">
+<h2 id="三三个会让人得出错误结论的陷阱">三、三个会让人得出错误结论的陷阱</h2>
+<h3 id="陷阱一fake-ip-dig-查出来的地址是假的">陷阱一：fake-ip —— <code>dig</code> 查出来的地址是假的</h3>
+<p>开了 TUN 模式的分流器（Clash / mihomo / sing-box）通常同时开 <strong>fake-ip</strong>： 它拦下 DNS 查询，给每个域名返回一个 <code>198.18.x.x</code> 的<strong>占位地址</strong>， 自己记住&quot;这个占位地址对应哪个域名&quot;，等程序连上来时再按域名匹配规则。</p>
+<p>后果：</p>
+<pre><code class="language-bash">dig +short api.anthropic.com
+# 198.18.0.56    ← 这不是任何真实主机</code></pre>
+<ul><li>查这个地址的 ASN / 归属<strong>毫无意义</strong>；</li><li><code>lsof</code> 里看到进程连 <code>198.18.0.140</code> 也不代表它连了什么可疑的东西。</li></ul>
+<p><code>198.18.0.0/15</code> 是 RFC 2544 给网络设备基准测试保留的段，公网不可路由 —— 所以拿来做占位很安全，也正因如此，它出现在你的连接表里一定是本地分流器造成的。</p>
+<p><strong>这个坑反过来有一个好处</strong>：分流器给<strong>每个域名</strong>分配独立的占位地址， 所以可以反查 —— 看到 <code>198.18.0.140</code> 就能推出它是哪个域名。 在正常环境里做不到这件事（多个域名共用一个 CDN IP）。 本仓的 <code>cem/resolve.py</code> 就是用这个办法给连接表补上域名。</p>
+<p>要拿到真实解析，得走 <strong>DoH</strong>：报文是端到端加密的，中间的分流器改不了里面的答案。</p>
+<pre><code class="language-bash">curl -s -H &#x27;accept: application/dns-json&#x27; \
+  &#x27;https://cloudflare-dns.com/dns-query?name=api.anthropic.com&amp;type=A&#x27;</code></pre>
+<p>界面上的「解析对账」面板就是把这两个结果并排放，不一致就标出来。</p>
+<h3 id="陷阱二按域名分派的解析器split-dns">陷阱二：按域名分派的解析器（split-DNS）</h3>
+<p>macOS 支持给<strong>不同域名指定不同的 DNS 服务器</strong>。VPN、Tailscale MagicDNS、 企业配置都会往里写。</p>
+<pre><code class="language-bash">scutil --dns | grep -A2 -E &#x27;^\s*domain&#x27;</code></pre>
+<p>如果输出里出现类似</p>
+<pre><code>  domain   : api.anthropic.com
+  nameserver[0] : &lt;某个隧道内的地址&gt;</code></pre>
+<p>说明这个域名的解析被交给了另一条隧道 —— 而<strong>解析走哪条隧道，流量通常也走那条</strong>。 这就解释了一类极难排查的现象：同一台机器上，某几个域名的行为和其他域名完全不同。</p>
+<p><code>cem doctor</code> 会把命中的域名和对应的 nameserver 都列出来。</p>
+<h3 id="陷阱三lsof-看不到代理后面的目的地">陷阱三：<code>lsof</code> 看不到代理后面的目的地</h3>
+<p>走本机 HTTP 代理的进程，<code>lsof</code> 只能看到</p>
+<pre><code>127.0.0.1:52044 -&gt; 127.0.0.1:&lt;代理端口&gt;</code></pre>
+<p>真实目的地在代理进程内部。桌面端和浏览器正好属于这一类， 所以<strong>它们的连接表天生是不完整的</strong>。</p>
+<p>工具不会假装这条限制不存在：这类连接标成 <code>local-proxy</code>， 并在结论里写明有多少条目的地不可见。</p>
+<hr class="anth-divider">
+<h2 id="四补上第三个陷阱读分流器自己的连接表">四、补上第三个陷阱：读分流器自己的连接表</h2>
+<p>Clash / mihomo（含 Clash Verge、各种 GUI 前端）以及兼容 clash-api 的 sing-box 都提供一个控制接口。开了之后：</p>
+<pre><code class="language-bash">curl -s http://127.0.0.1:9090/connections | python3 -m json.tool | head -40</code></pre>
+<p>每条连接会带上这些字段，正是 <code>lsof</code> 缺的那一半：</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>字段</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>metadata.host</code></td><td>真实目标域名（不是占位地址）</td></tr>
+<tr><td><code>metadata.processPath</code></td><td>哪个进程发起的</td></tr>
+<tr><td><code>rule</code> / <code>rulePayload</code></td><td>命中了哪条分流规则</td></tr>
+<tr><td><code>chains</code></td><td>走了哪条代理链，<strong>第一个元素就是最终出口节点</strong></td></tr>
+<tr><td><code>upload</code> / <code>download</code></td><td>这条连接的流量</td></tr>
+</tbody></table></div>
+<p><strong>怎么打开</strong>：在配置文件里加</p>
+<pre><code class="language-yaml">external-controller: 127.0.0.1:9090
+secret: &quot;换成一个你自己的随机字符串&quot;</code></pre>
+<p>安全注意：</p>
+<ul><li>地址<strong>只写 <code>127.0.0.1</code></strong>。绑到 <code>0.0.0.0</code> 等于把&quot;改我全部代理规则&quot;的权限 开给局域网。</li><li>一定设 <code>secret</code>。没有 secret 的控制接口，本机任何进程（包括网页里的 JavaScript，如果它能访问回环）都能改你的配置。</li><li>本仓只<strong>读</strong> <code>/connections</code>，从不写任何配置。secret 只从命令行参数或 环境变量读，不落盘。</li></ul>
+<p><code>cem/clash.py</code> 是这部分的实现，接了之后连接表里的 <code>local-proxy</code> 行就能 换成真实域名和出口节点名。</p>
+<hr class="anth-divider">
+<h2 id="五把配置改成一致的">五、把配置改成一致的</h2>
+<p>量出来不一致之后，通常有三种改法：</p>
+<p><strong>改法一：让 CLI 也走系统代理那条路。</strong> 在 shell 配置里显式设：</p>
+<pre><code class="language-bash">export HTTPS_PROXY=http://127.0.0.1:&lt;你的代理端口&gt;
+export HTTP_PROXY=http://127.0.0.1:&lt;你的代理端口&gt;
+export NO_PROXY=localhost,127.0.0.1,::1</code></pre>
+<p>设完再跑一次 <code>cem probe</code>，两个入口的出口应当一致。</p>
+<p><strong>改法二：让分流规则对 Claude 的所有域名给同一个出口。</strong> 在分流器里给这一组域名建一个规则集合，指向同一个节点组。 这样按 IP 命中还是按域名命中都落到同一个出口。 清单可以直接从 <code>python3 -m cem endpoints --json</code> 生成。</p>
+<p><strong>改法三：什么都不改，但知道自己在做什么。</strong> 有时候不一致是有意的 （业务走低延迟节点、更新下载走另一条）。这时候监控的价值是 <strong>在它意外变化时告诉你</strong> —— 界面上的「出口变更」时间轴就是为这个存在的。</p>
+<hr class="anth-divider">
+<h2 id="六受限地区">六、受限地区</h2>
+<p>Claude 的服务条款把若干地区列为受限。出口落在这些地区是<strong>账号风险</strong>， 不是&quot;慢一点&quot;：</p>
+<p><code>CN</code> 中国大陆 · <code>HK</code> 香港 · <code>MO</code> 澳门 · <code>RU</code> 俄罗斯 · <code>KP</code> 朝鲜 · <code>IR</code> 伊朗 · <code>SY</code> 叙利亚 · <code>CU</code> 古巴 · <code>BY</code> 白俄罗斯 · <code>VE</code> 委内瑞拉</p>
+<p>这份名单在 <code>cem/view.py</code> 的 <code>RESTRICTED_CC</code> 里，界面上命中会标红色药丸。</p>
+<p>需要说明清楚的是：<strong>这份名单是本工具依据公开条款整理的，不是 Anthropic 的 官方接口返回的</strong>。它会过期，最终以官方条款为准。工具的职责是 &quot;出口落在这里时提醒你去核对&quot;，不是&quot;替官方判定&quot;。</p>
+      <div class="chapter__nav"><a class="anth-link" href="02-telemetry.html">← 遥测</a><a class="anth-link" href="04-latency.html">延迟 →</a></div>
+    </article>
+  </div>
+</main>
+<footer class="anth-footer">
+  <div class="anth-footer-grid">
+    <div class="anth-footer-group"><h5>原理</h5><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a></div>
+    <div class="anth-footer-group"><h5>动手</h5><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+    <div class="anth-footer-group"><h5>仓库</h5>
+      <a href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">源码</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">参与维护</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可</a>
+    </div>
+    <div class="anth-footer-group"><h5>看一眼</h5>
+      <a href="demo.html">成品界面</a>
+      <a href="architecture.html">架构与设计</a>
+      <a href="index.html">首页</a>
+    </div>
+  </div>
+  <div class="anth-footer-legal">
+    全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址 ·
+    文档与截图中的地址取自 RFC 5737 文档保留段
+  </div>
+</footer>
+</body>
+</html>

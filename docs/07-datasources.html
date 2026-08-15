@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据源：每个结论从哪来 — claude-egress-monitor</title>
+<meta name="description" content="这个工具不自带任何地理库、不打包任何 IP 数据库。屏幕上每一个&quot;这个地址在哪、 是不是机房&quot;的判断，都来自一个可以点开、可以自己复现的外部来源。">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/anthropic.css">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<nav class="anth-nav"><div class="anth-nav-inner">
+  <a class="brand" href="index.html">claude-egress-monitor</a>
+  <div class="nav-links"><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+  <div class="nav-side">
+    <a href="demo.html">Demo</a>
+    <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div></nav>
+<main class="chapter">
+  <div class="chapter__inner">
+    <aside class="chapter__toc">
+      <span class="chapter__toc-label">本页</span>
+      <a href="#一三条选型原则">一、三条选型原则</a><a href="#二数据源清单">二、数据源清单</a><a href="#三为什么不用-maxmind-geolite2">三、为什么不用 MaxMind GeoLite2</a><a href="#四几个自己拼出来的判断手段">四、几个自己拼出来的判断手段</a><a href="#五置信度四档">五、置信度四档</a><a href="#六全部拉一遍看看">六、全部拉一遍看看</a>
+    </aside>
+    <article class="chapter__body">
+      <span class="anth-badge">第 7 章 · 数据源</span>
+      <h1 id="数据源每个结论从哪来">数据源：每个结论从哪来</h1>
+<p>这个工具不自带任何地理库、不打包任何 IP 数据库。屏幕上每一个&quot;这个地址在哪、 是不是机房&quot;的判断，都来自一个可以点开、可以自己复现的外部来源。</p>
+<p>这一章把它们全列出来：<strong>要什么、给什么、多久更新一次、缓存多久、什么许可、 以及它能把结论撑到哪一档置信度</strong>。</p>
+<hr class="anth-divider">
+<h2 id="一三条选型原则">一、三条选型原则</h2>
+<p><strong>1. 优先用&quot;当事人自己发布的&quot;数据。</strong> 判断一个地址是不是 AWS 的机房，最硬的证据是 AWS 自己发布的 IP 段清单， 而不是第三方的推测。所以厂商官方清单排在所有第三方数据源前面， 命中它的结论标为<strong>确证</strong>。</p>
+<p><strong>2. 数据源给不了的维度，不假装能给。</strong> 免费 IP 情报普遍只有一个 <code>hosting</code> 布尔值，它只回答&quot;是不是机房&quot;， <strong>没有&quot;住宅 vs 企业&quot;这个维度</strong>。所以本工具那一档叫「非机房宽带」， 不叫「住宅」——叫住宅是在宣称一个数据源给不了的结论。</p>
+<p><strong>3. 缓存要短，并且把拉取时间显示出来。</strong> &quot;这个 IP 段属于 Google Cloud&quot;是会变的。厂商清单缓存 24 小时， 界面上写明这份清单是什么时候拉的。拉一次用一年的缓存比没有缓存更危险 —— 它会给出一个看起来很确定的过期答案。</p>
+<hr class="anth-divider">
+<h2 id="二数据源清单">二、数据源清单</h2>
+<h3 id="出口地址本身">出口地址本身</h3>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>来源</th><th>地址</th><th>给什么</th><th>时效</th><th>许可</th></tr></thead>
+<tbody>
+<tr><td><strong>Cloudflare trace</strong></td><td><code>https://&lt;任一 CF 站点&gt;/cdn-cgi/trace</code></td><td><code>ip=</code> 出口地址、<code>loc=</code> 国家、<code>colo=</code> 边缘机房</td><td>实时，不缓存</td><td>公开端点，无需鉴权</td></tr>
+</tbody></table></div>
+<p>这是整个工具的地基，值得单独说清楚。</p>
+<p><code>cdn-cgi/trace</code> 是 Cloudflare 在<strong>每一个</strong>它托管的站点上都开着的一个诊断端点。 它返回的 <code>ip=</code> 是 <strong>Cloudflare 那侧看到的来源地址</strong> —— 也就是说， 这不是&quot;本机某个网卡的地址&quot;，而是<strong>目的地眼里你是谁</strong>。风控看的正是这个值。</p>
+<p><code>claude.ai</code>、<code>api.anthropic.com</code> 都在 Cloudflare 后面，所以可以直接问它们自己：</p>
+<pre><code class="language-bash">curl -s https://claude.ai/cdn-cgi/trace
+# ip=203.0.113.24
+# loc=SG
+# colo=SIN</code></pre>
+<p><code>colo</code> 是三字母的 <strong>IATA 机场代码</strong>，表示你被接到了哪个边缘机房： <code>SIN</code> = 新加坡樟宜，<code>NRT</code> = 东京成田，<code>LAX</code> = 洛杉矶。 它和 <code>loc</code>（出口 IP 的注册国家）<strong>可以不一致</strong> —— 那通常说明 anycast 把你接到了邻近国家的机房，是正常现象，不是问题。</p>
+<blockquote class="anth-quote">本工具对每个入口用<strong>该入口自己的代理配置</strong>去问这个端点。所以得到的 不是&quot;这台机器的出口&quot;，而是&quot;<strong>这个入口的出口</strong>&quot;——三个入口可以是三个答案。 原理见 <a href="03-routing.html">03-routing.md</a>。</blockquote>
+<h3 id="厂商官方-ip-段确证级">厂商官方 IP 段（确证级）</h3>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>来源</th><th>地址</th><th>规模</th><th>更新</th></tr></thead>
+<tbody>
+<tr><td>AWS</td><td><code>https://ip-ranges.amazonaws.com/ip-ranges.json</code></td><td>~8000 段</td><td>每天多次</td></tr>
+<tr><td>Google Cloud</td><td><code>https://www.gstatic.com/ipranges/cloud.json</code></td><td>~1400 段</td><td>不定期</td></tr>
+<tr><td>Cloudflare</td><td><code>https://www.cloudflare.com/ips-v4</code> · <code>ips-v6</code></td><td>~30 段</td><td>很少</td></tr>
+<tr><td>DigitalOcean</td><td><code>https://www.digitalocean.com/geo/google.csv</code></td><td>~2000 段</td><td>不定期</td></tr>
+<tr><td>Oracle Cloud</td><td><code>https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json</code></td><td>~700 段</td><td>不定期</td></tr>
+</tbody></table></div>
+<p>一共约 <strong>两万条前缀</strong>，首次拉取加解析约 4 秒，之后缓存 24 小时到 <code>data/cloud-ranges.json</code>。</p>
+<p><strong>为什么值得为它花这 4 秒</strong>：命中厂商自己发布的清单，是唯一能把 &quot;这是机房 IP&quot;这个判断标成<strong>确证</strong>的证据。其余所有来源都只能给到&quot;较可能&quot;。</p>
+<p>实测一例：Datadog US5 的接入点解析到 <code>34.149.66.165</code>，命中 Google Cloud 的 <code>34.149.0.0/16</code> —— 于是可以确证 US5 跑在 GCP 上， 而不是&quot;看起来像云&quot;。</p>
+<pre><code class="language-bash">python3 -m cem probe --json | python3 -m json.tool | grep -A3 cloud_provider</code></pre>
+<p>拉不到就降级：清单缺失时这一档判断退回&quot;较可能&quot;，其余功能不受影响。</p>
+<h3 id="asn-与归属">ASN 与归属</h3>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>来源</th><th>协议</th><th>给什么</th><th>限额</th><th>置信度</th></tr></thead>
+<tbody>
+<tr><td><strong>Team Cymru</strong></td><td>DNS TXT <code>origin.asn.cymru.com</code></td><td>ASN、前缀、注册国、RIR</td><td>无明确限额，走 DNS 很轻</td><td>确证（BGP 权威）</td></tr>
+<tr><td><strong>ip-api.com</strong></td><td>HTTP JSON</td><td>组织名、城市、<code>hosting</code> / <code>mobile</code> / <code>proxy</code></td><td>免费版 45 次/分钟</td><td>较可能</td></tr>
+<tr><td><strong>ipinfo.io</strong></td><td>HTTP JSON</td><td>城市、<code>anycast</code> 标记</td><td>无 token 有日限额</td><td>较可能</td></tr>
+<tr><td><strong>RDAP</strong></td><td>HTTP JSON（RFC 7482/7483）</td><td>注册机构、分配日期、备注</td><td>各 RIR 自定，通常宽松</td><td>确证（注册事实）</td></tr>
+<tr><td><strong>rDNS</strong></td><td>DNS PTR</td><td>主机名（常含机房代码）</td><td>—</td><td>推测</td></tr>
+</tbody></table></div>
+<p><strong>Team Cymru 的 DNS 接口</strong>是这里最被低估的一个。它把 BGP 全表的 &quot;这个地址属于哪个 AS&quot;做成 DNS 查询，一次查询几十字节，没有 API key， 没有速率墙：</p>
+<p>地址要<strong>四段倒着写</strong>再拼上 <code>origin.asn.cymru.com</code>。 以 <code>13.107.42.16</code> 为例，倒过来是 <code>16.42.107.13</code>：</p>
+<pre><code class="language-bash">dig +short TXT 16.42.107.13.origin.asn.cymru.com
+# &quot;8068 | 13.107.42.0/24 | US | arin | 2015-05-27&quot;
+#  ↑ASN   ↑前缀            ↑国  ↑RIR   ↑分配日期</code></pre>
+<p>拿到 ASN 之后再查一次组织名（<code>AS8068.asn.cymru.com</code>）。 IPv6 走 <code>origin6.asn.cymru.com</code>，地址按 nibble 倒序。</p>
+<p><strong>RDAP 有一个坑必须知道</strong>：向错误的 RIR 查询时，它不会返回 404， 而是返回一条<strong>占位记录</strong>（<code>IANA-NETBLOCK-34</code> 之类，备注写着 &quot;not allocated to APNIC&quot;）。看起来像有效答案，但内容是错的。 解法是先读 IANA 的引导文件确定该问谁：</p>
+<pre><code class="language-bash">curl -s https://data.iana.org/rdap/ipv4.json | head -c 400</code></pre>
+<p>本工具内置了占位记录识别，命中就丢弃并降级，不会把它当成注册信息展示。</p>
+<h3 id="dns-对账">DNS 对账</h3>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>来源</th><th>地址</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>Cloudflare DoH</td><td><code>https://cloudflare-dns.com/dns-query</code></td><td>拿&quot;外面看到的&quot;解析结果</td></tr>
+<tr><td>Google DoH</td><td><code>https://dns.google/resolve</code></td><td>第二个独立来源，交叉验证</td></tr>
+<tr><td>本机</td><td><code>getaddrinfo()</code></td><td>拿&quot;进程真正会连的&quot;地址</td></tr>
+</tbody></table></div>
+<p>两个 DoH 来源必须<strong>互相独立</strong>才有交叉验证的意义 —— 一个被污染时另一个还在。 本机解析结果和它们不一致，就说明本机的 DNS 被改写了（fake-ip、 split-DNS、hosts 文件、企业 DNS）。判读方法见 <a href="03-routing.html">03-routing.md</a>。</p>
+<h3 id="路径质量可选">路径质量（可选）</h3>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>工具</th><th>用途</th><th>装法</th></tr></thead>
+<tbody>
+<tr><td><code>mtr</code></td><td>逐跳延迟与丢包</td><td><code>brew install mtr</code>，见 <a href="08-deploy.html">08-deploy.md</a></td></tr>
+</tbody></table></div>
+<p>没装就降级显示&quot;未安装&quot;并给出安装命令，主流程不受影响。</p>
+<hr class="anth-divider">
+<h2 id="三为什么不用-maxmind-geolite2">三、为什么不用 MaxMind GeoLite2</h2>
+<p>GeoLite2 是最常被推荐的免费 IP 地理库，本工具<strong>没有用它</strong>，三个原因：</p>
+<ol><li><strong>要注册账号拿 license key</strong>。一个&quot;clone 完就能跑&quot;的工具不该要求 使用者先去注册一个第三方账号。</li><li><strong>数据库文件几十 MB</strong>，要么打包进仓库（仓库体积翻几十倍， 而且一提交就过期），要么让使用者自己下载（回到第 1 条）。</li><li><strong>它答不了最关键的那个问题</strong>。GeoLite2 给的是&quot;这个 IP 在哪&quot;， 而这个工具真正要回答的是&quot;<strong>目的地那侧看到的是哪个 IP</strong>&quot; —— 后者只能问目的地，任何本地数据库都给不了。</li></ol>
+<p>需要离线运行、且能接受注册流程的场景，GeoLite2 是合理选择 —— 但那是另一个工具的定位。</p>
+<hr class="anth-divider">
+<h2 id="四几个自己拼出来的判断手段">四、几个自己拼出来的判断手段</h2>
+<p>下面这些不是某个数据源直接给的，是把几个来源组合出来的。 <strong>每一条都在界面上标了置信度</strong>，判不出就写判不出。</p>
+<h3 id="1-tun-抢跑用四段延迟的形状反推">1. TUN 抢跑：用四段延迟的形状反推</h3>
+<p>TCP 握手 &lt; 5ms 而 TLS 握手 &gt; 50ms，是一个很特别的组合。 正常情况下这两段的量级应该接近（都要跨一次网络往返）。 TCP 快得不真实、TLS 却是真实的跨国耗时，说明 <strong>TCP 那一段根本没出本机</strong> —— TUN 把它在本地就应答了，真正的连接是在 TLS 阶段才建立的。</p>
+<p>这条判断标为<strong>推测</strong>：它是一个很强的信号，但不是直接观测。</p>
+<h3 id="2-fake-ip-反查域名">2. fake-ip 反查域名</h3>
+<p>分流器给<strong>每个域名</strong>分配一个独立的 <code>198.18.x.x</code> 占位地址。 这是个坑（查它的归属毫无意义），但反过来有用：先把所有 Claude 域名解析一遍 建立&quot;占位地址 → 域名&quot;的表，之后在连接列表里看到占位地址就能反推是哪个域名。</p>
+<p>这条标为<strong>确证</strong>：映射是本机自己刚建立的，不是猜的。</p>
+<h3 id="3-出口一致性分五档而不是一致-不一致">3. 出口一致性分五档，而不是&quot;一致 / 不一致&quot;</h3>
+<p>同一个国家不等于同一个出口。所以分成： <strong>完全相同 → 双栈（v4/v6 同一出口）→ 同网络（同 ASN 不同地址）→ 多网络（不同 ASN）→ 跨国</strong>。</p>
+<p>前两档是正常的，第三档常见于负载均衡，第四第五档才值得看。 二元的&quot;一致/不一致&quot;会把双栈报成问题 —— 那是一次假警报。</p>
+<h3 id="4-动态还是静态-ip需要观测窗口">4. 动态还是静态 IP：需要观测窗口</h3>
+<p>单次采样答不了这个问题。本工具的规则是：<strong>观测不足 6 小时就明说 &quot;还判断不了&quot;</strong>，而不是给一个看起来很确定的答案。够 6 小时之后， 按&quot;这段时间里出口地址换过几次、换的是不是同一个网段&quot;来分档。</p>
+<h3 id="5-终点不回-icmp-丢包-100">5. 终点不回 ICMP ≠ 丢包 100%</h3>
+<p>路径质量面板里，终点一个包都没回时报&quot;<strong>量不出丢包率</strong>&quot;，不报&quot;丢包 100%&quot;。 大量主机在防火墙上直接丢掉 ICMP echo，TCP 却完全正常。 报成丢包会让人去换节点，换完还是 100%。</p>
+<hr class="anth-divider">
+<h2 id="五置信度四档">五、置信度四档</h2>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>档位</th><th>判据</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td><strong>确证</strong></td><td>权威来源直接说的</td><td>命中 AWS 官方发布的 IP 段</td></tr>
+<tr><td><strong>较可能</strong></td><td>第三方数据源的判断</td><td>ip-api 说 <code>hosting: true</code></td></tr>
+<tr><td><strong>推测</strong></td><td>单一弱线索</td><td>组织名里有 &quot;Telecom&quot; 关键词</td></tr>
+<tr><td><strong>判不出</strong></td><td>没有线索</td><td>上述全部缺失</td></tr>
+</tbody></table></div>
+<p><strong>判不出就写判不出。</strong> 尤其当猜错的方向不对称时 —— 把机房 IP 猜成家宽会让人以为风险更低，那是最危险的方向。</p>
+<hr class="anth-divider">
+<h2 id="六全部拉一遍看看">六、全部拉一遍看看</h2>
+<pre><code class="language-bash"># 每个数据源各查一次，打印来源和耗时
+python3 -m cem probe --all --json | python3 -m json.tool
+
+# 只看厂商 IP 段的缓存状态
+ls -lh data/cloud-ranges.json</code></pre>
+<p>界面上「诊断与建议」里每一条结论都带<strong>判据</strong>（算出它的实测数字） 和<strong>来源</strong>，可以逐条对着这一章核。</p>
+      <div class="chapter__nav"><a class="anth-link" href="06-toolbox.html">← 工具箱</a><a class="anth-link" href="08-deploy.html">安装部署 →</a></div>
+    </article>
+  </div>
+</main>
+<footer class="anth-footer">
+  <div class="anth-footer-grid">
+    <div class="anth-footer-group"><h5>原理</h5><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a></div>
+    <div class="anth-footer-group"><h5>动手</h5><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+    <div class="anth-footer-group"><h5>仓库</h5>
+      <a href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">源码</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">参与维护</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可</a>
+    </div>
+    <div class="anth-footer-group"><h5>看一眼</h5>
+      <a href="demo.html">成品界面</a>
+      <a href="architecture.html">架构与设计</a>
+      <a href="index.html">首页</a>
+    </div>
+  </div>
+  <div class="anth-footer-legal">
+    全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址 ·
+    文档与截图中的地址取自 RFC 5737 文档保留段
+  </div>
+</footer>
+</body>
+</html>

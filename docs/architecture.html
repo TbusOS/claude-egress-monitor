@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>架构与设计 — claude-egress-monitor</title>
+<meta name="description" content="claude-egress-monitor 的模块分层、一轮采样的数据流，以及七条决定了这个工具长成什么样的设计取舍。">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/anthropic.css">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  .arch-head { padding: var(--space-8) 0 var(--space-6); }
+  .arch-head h1 {
+    font-family: var(--font-heading); font-size: 44px; line-height: 1.12;
+    font-weight: 600; letter-spacing: -0.025em; margin: var(--space-4) 0 var(--space-5);
+  }
+  .arch-lead { font-size: 17px; line-height: 1.78; max-width: 74ch; color: var(--anth-text-secondary); }
+  .arch-section { padding: var(--space-8) 0; }
+  .arch-section h2 {
+    font-family: var(--font-heading); font-size: 29px; font-weight: 600;
+    letter-spacing: -0.02em; margin: var(--space-3) 0 var(--space-4);
+    scroll-margin-top: var(--space-6);
+  }
+  .arch-section h3 {
+    font-family: var(--font-heading); font-size: 18px; font-weight: 600;
+    margin: var(--space-6) 0 var(--space-3);
+  }
+  .arch-section p { font-size: 15.5px; line-height: 1.78; max-width: 76ch; margin: 0 0 var(--space-4); }
+  .arch-section li { font-size: 15.5px; line-height: 1.75; margin-bottom: 7px; }
+  .arch-section ul { padding-left: 1.35em; margin: 0 0 var(--space-4); }
+  .arch-section a { color: var(--anth-orange-ink); }
+  .arch-section code {
+    font-family: var(--font-mono); font-size: 0.87em;
+    background: var(--anth-bg-subtle); border-radius: 4px; padding: 1px 5px;
+  }
+  .arch-section table { font-size: 14px; }
+  .arch-section th, .arch-section td { vertical-align: top; line-height: 1.6; }
+
+  /* 设计决策：编号 + 选了什么 + 为什么。三段结构固定，读者可以跳着看。 */
+  .decision {
+    display: grid; grid-template-columns: 46px minmax(0, 1fr);
+    gap: var(--space-5); padding: var(--space-6) 0;
+    border-top: 1px solid var(--anth-light-gray);
+  }
+  .decision__num {
+    font-family: var(--font-heading); font-size: 15px; font-weight: 700;
+    color: #fff; background: var(--anth-cta); width: 34px; height: 34px;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  }
+  .decision__title {
+    font-family: var(--font-heading); font-size: 19px; font-weight: 600;
+    letter-spacing: -0.01em; margin: 2px 0 var(--space-3);
+  }
+  .decision__why { color: var(--anth-text-secondary); }
+  .decision__why strong { color: var(--anth-text); }
+
+  @media (max-width: 900px) {
+    .arch-head h1 { font-size: 32px; }
+    .decision { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  }
+</style>
+</head>
+<body>
+
+<nav class="anth-nav"><div class="anth-nav-inner">
+  <a class="brand" href="index.html">claude-egress-monitor</a>
+  <div class="nav-links">
+    <a href="01-endpoints.html">出网域名</a>
+    <a href="03-routing.html">出口为什么不同</a>
+    <a href="07-datasources.html">数据源</a>
+    <a href="08-deploy.html">安装部署</a>
+  </div>
+  <div class="nav-side">
+    <a href="demo.html">Demo</a>
+    <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div></nav>
+
+<header class="arch-head">
+  <div class="anth-container anth-container--wide">
+    <span class="anth-badge">架构与设计</span>
+    <h1>三层，二十四个模块，一条单向的数据流</h1>
+    <p class="arch-lead">
+      这一页写给想改这个工具的人。它讲三件事：<strong>模块怎么分层</strong>、
+      <strong>一轮采样里数据怎么流</strong>、以及<strong>七条决定了它长成什么样的取舍</strong>。
+      要动手改代码，配合 <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md">CONTRIBUTING</a>
+      一起读 —— 那份讲的是规矩，这份讲的是形状。
+    </p>
+  </div>
+</header>
+
+<!-- ═══════════════════════ 分层 ═══════════════════════ -->
+<section class="arch-section anth-section--subtle">
+  <div class="anth-container anth-container--wide">
+    <h2 id="layers">一、分层：采集 / 计算 / 呈现</h2>
+    <p>
+      分层的判据只有一条：<strong>这个模块碰不碰外界</strong>。碰外界的（发请求、跑命令、
+      读文件）归采集层；不碰的归计算层，全是纯函数，可以喂固定样本做离线测试；
+      呈现层只负责整形，不做判断。
+    </p>
+    <p>
+      这条线画得很硬，好处是<strong>测试套件可以完全离线</strong> ——
+      一个需要联网才能跑的测试套件，在没网的时候就等于没有。
+      而这个工具恰恰是给网络出问题的人用的。
+    </p>
+
+    <figure>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1160 470" width="1160" role="img"
+             aria-label="三层架构：采集层十个模块、计算层七个模块、呈现层六个模块，数据单向流动">
+          <defs>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#8d8b80"/>
+            </marker>
+          </defs>
+
+          <!-- ── 采集层 ── -->
+          <rect x="14" y="14" width="352" height="442" rx="16"
+                fill="rgba(217,119,87,0.10)" stroke="#d97757"/>
+          <circle cx="42" cy="46" r="7" fill="#d97757"/>
+          <text x="58" y="51" font-family="Poppins, sans-serif" font-size="17" font-weight="600" fill="#141413">采集层</text>
+          <text x="58" y="72" font-family="Poppins, sans-serif" font-size="12.5" fill="#6b6a5f">碰外界：发请求 / 跑命令 / 读文件</text>
+
+          <rect x="34" y="92"  width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="48" y="114" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">net.py</text>
+          <text x="48" y="132" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">分段计时的 HTTPS</text>
+
+          <rect x="198" y="92"  width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="212" y="114" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">paths.py</text>
+          <text x="212" y="132" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">三个入口的路径</text>
+
+          <rect x="34" y="156" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="48" y="178" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">resolve.py</text>
+          <text x="48" y="196" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">DNS 对账 / fake-ip</text>
+
+          <rect x="198" y="156" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="212" y="178" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">sockets.py</text>
+          <text x="212" y="196" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">lsof 实时连接</text>
+
+          <rect x="34" y="220" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="48" y="242" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">asn.py</text>
+          <text x="48" y="260" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">Cymru / ip-api</text>
+
+          <rect x="198" y="220" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="212" y="242" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">cloudranges.py</text>
+          <text x="212" y="260" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">厂商官方 IP 段</text>
+
+          <rect x="34" y="284" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="48" y="306" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">rdap.py</text>
+          <text x="48" y="324" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">RIR 注册信息</text>
+
+          <rect x="198" y="284" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="212" y="306" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">pathtrace.py</text>
+          <text x="212" y="324" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">mtr 逐跳（可选）</text>
+
+          <rect x="34" y="348" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="48" y="370" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">telemetry.py</text>
+          <text x="48" y="388" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">静态提取字段</text>
+
+          <rect x="198" y="348" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="212" y="370" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">clash.py</text>
+          <text x="212" y="388" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">分流器控制接口</text>
+
+          <text x="34" y="428" font-family="Poppins, sans-serif" font-size="12" fill="#6b6a5f">拿不到就返回 None —— 一个可选增强</text>
+          <text x="34" y="446" font-family="Poppins, sans-serif" font-size="12" fill="#6b6a5f">不该让主流程失败。</text>
+
+          <!-- ── 计算层 ── -->
+          <rect x="404" y="14" width="352" height="442" rx="16"
+                fill="rgba(106,155,204,0.10)" stroke="#6a9bcc"/>
+          <circle cx="432" cy="46" r="7" fill="#6a9bcc"/>
+          <text x="448" y="51" font-family="Poppins, sans-serif" font-size="17" font-weight="600" fill="#141413">计算层</text>
+          <text x="448" y="72" font-family="Poppins, sans-serif" font-size="12.5" fill="#6b6a5f">不碰外界：纯函数，可离线测试</text>
+
+          <rect x="424" y="92" width="312" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="440" y="114" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">model.py</text>
+          <text x="440" y="132" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">全部数据结构，frozen dataclass，不可变</text>
+
+          <rect x="424" y="156" width="312" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="440" y="178" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">probe.py</text>
+          <text x="440" y="196" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">拼成一轮采样 · claude_traces() 在这里过滤对照组</text>
+
+          <rect x="424" y="220" width="312" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="440" y="242" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">diagnose.py</text>
+          <text x="440" y="260" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">出口画像 / 稳定性 / 现象→判据→成因→方案</text>
+
+          <rect x="424" y="284" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="440" y="306" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">checks.py</text>
+          <text x="440" y="324" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">环境级检查</text>
+
+          <rect x="586" y="284" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="602" y="306" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">endpoints.py</text>
+          <text x="602" y="324" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">域名清单 + 取证</text>
+
+          <rect x="424" y="348" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="440" y="370" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">store.py</text>
+          <text x="440" y="388" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">内存环形缓冲</text>
+
+          <rect x="586" y="348" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="602" y="370" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">history.py</text>
+          <text x="602" y="388" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">按天归档 / 可删</text>
+
+          <text x="424" y="428" font-family="Poppins, sans-serif" font-size="12" fill="#6b6a5f">176 个测试全部落在这一层，</text>
+          <text x="424" y="446" font-family="Poppins, sans-serif" font-size="12" fill="#6b6a5f">一个请求都不发。</text>
+
+          <!-- ── 呈现层 ── -->
+          <rect x="794" y="14" width="352" height="442" rx="16"
+                fill="rgba(120,140,93,0.10)" stroke="#788c5d"/>
+          <circle cx="822" cy="46" r="7" fill="#788c5d"/>
+          <text x="838" y="51" font-family="Poppins, sans-serif" font-size="17" font-weight="600" fill="#141413">呈现层</text>
+          <text x="838" y="72" font-family="Poppins, sans-serif" font-size="12.5" fill="#6b6a5f">只整形，不判断</text>
+
+          <rect x="814" y="92" width="312" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="830" y="114" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">view.py</text>
+          <text x="830" y="132" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">整形成界面要的形状 · 只出事实，不出文案</text>
+
+          <rect x="814" y="156" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="830" y="178" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">sampler.py</text>
+          <text x="830" y="196" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">后台循环 + 开关</text>
+
+          <rect x="976" y="156" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="992" y="178" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">server.py</text>
+          <text x="992" y="196" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">HTTP + SSE</text>
+
+          <rect x="814" y="220" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="830" y="242" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">cli.py</text>
+          <text x="830" y="260" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">命令行入口</text>
+
+          <rect x="976" y="220" width="150" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="992" y="242" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">demo.py</text>
+          <text x="992" y="260" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">虚构一轮采样</text>
+
+          <rect x="814" y="284" width="312" height="52" rx="8" fill="#141413"/>
+          <text x="830" y="306" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#faf9f5">web/index.html · web/app.js</text>
+          <text x="830" y="324" font-family="Poppins, sans-serif" font-size="11.5" fill="#b0aea5">九个面板 · 双语文案只写在这里</text>
+
+          <rect x="814" y="348" width="312" height="52" rx="8" fill="#fff" stroke="#e8e6dc"/>
+          <text x="830" y="370" font-family="JetBrains Mono, monospace" font-size="12.5" fill="#141413">scripts/build_docs.py</text>
+          <text x="830" y="388" font-family="Poppins, sans-serif" font-size="11.5" fill="#6b6a5f">docs/*.md → 这个站 + demo 页</text>
+
+          <text x="814" y="428" font-family="Poppins, sans-serif" font-size="12" fill="#6b6a5f">界面不发明数字：没有的值渲染成</text>
+          <text x="814" y="446" font-family="Poppins, sans-serif" font-size="12" fill="#6b6a5f">破折号，绝不用 0 顶上。</text>
+
+          <!-- 层间箭头 -->
+          <line x1="366" y1="235" x2="398" y2="235" stroke="#8d8b80" stroke-width="2" marker-end="url(#a2)"/>
+          <line x1="756" y1="235" x2="788" y2="235" stroke="#8d8b80" stroke-width="2" marker-end="url(#a2)"/>
+        </svg>
+      </div>
+      <figcaption>
+        数据只往一个方向流。呈现层拿不到采集层的对象，只拿计算层整形过的字典 ——
+        所以换一个前端不需要碰任何采集代码，加一个数据源也不需要碰界面。
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 一轮采样 ═══════════════════════ -->
+<section class="arch-section">
+  <div class="anth-container anth-container--wide">
+    <h2 id="round">二、一轮采样里发生了什么</h2>
+    <p>
+      按下「立刻采一轮」或者定时器到点时，走的是下面这条链。整条链在一个后台线程里跑，
+      界面通过 SSE 收结果 —— 采样卡住不会让界面卡住。
+    </p>
+
+    <figure>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1160 360" width="1160" role="img"
+             aria-label="一轮采样的六个步骤：确定路径、并行探测、解析对账、列连接、归属查询、诊断整形">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#8d8b80"/>
+            </marker>
+          </defs>
+
+          <!-- 步骤条 -->
+          <g font-family="Poppins, sans-serif">
+            <rect x="16" y="70" width="168" height="92" rx="12" fill="rgba(217,119,87,0.14)" stroke="#d97757"/>
+            <circle cx="42" cy="96" r="12" fill="#d97757"/>
+            <text x="42" y="101" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">1</text>
+            <text x="64" y="101" font-size="14.5" font-weight="600" fill="#141413">确定路径</text>
+            <text x="32" y="126" font-size="12" fill="#6b6a5f">读环境变量 + 系统代理，</text>
+            <text x="32" y="144" font-size="12" fill="#6b6a5f">得出三条等价探测路径。</text>
+
+            <rect x="212" y="70" width="168" height="92" rx="12" fill="rgba(217,119,87,0.14)" stroke="#d97757"/>
+            <circle cx="238" cy="96" r="12" fill="#d97757"/>
+            <text x="238" y="101" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">2</text>
+            <text x="260" y="101" font-size="14.5" font-weight="600" fill="#141413">并行探测</text>
+            <text x="228" y="126" font-size="12" fill="#6b6a5f">每条路径 × 每个域名问一次</text>
+            <text x="228" y="144" font-size="12" fill="#6b6a5f">cdn-cgi/trace，四段计时。</text>
+
+            <rect x="408" y="70" width="168" height="92" rx="12" fill="rgba(217,119,87,0.14)" stroke="#d97757"/>
+            <circle cx="434" cy="96" r="12" fill="#d97757"/>
+            <text x="434" y="101" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">3</text>
+            <text x="456" y="101" font-size="14.5" font-weight="600" fill="#141413">解析对账</text>
+            <text x="424" y="126" font-size="12" fill="#6b6a5f">本机解析 vs 两个独立 DoH，</text>
+            <text x="424" y="144" font-size="12" fill="#6b6a5f">对不上就是 DNS 被改写了。</text>
+
+            <rect x="604" y="70" width="168" height="92" rx="12" fill="rgba(217,119,87,0.14)" stroke="#d97757"/>
+            <circle cx="630" cy="96" r="12" fill="#d97757"/>
+            <text x="630" y="101" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">4</text>
+            <text x="652" y="101" font-size="14.5" font-weight="600" fill="#141413">列实时连接</text>
+            <text x="620" y="126" font-size="12" fill="#6b6a5f">lsof 抓 Claude 的 socket，</text>
+            <text x="620" y="144" font-size="12" fill="#6b6a5f">fake-ip 反查回域名。</text>
+
+            <rect x="800" y="70" width="168" height="92" rx="12" fill="rgba(106,155,204,0.16)" stroke="#6a9bcc"/>
+            <circle cx="826" cy="96" r="12" fill="#6a9bcc"/>
+            <text x="826" y="101" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">5</text>
+            <text x="848" y="101" font-size="14.5" font-weight="600" fill="#141413">归属与置信度</text>
+            <text x="816" y="126" font-size="12" fill="#6b6a5f">先查厂商官方 IP 段（确证），</text>
+            <text x="816" y="144" font-size="12" fill="#6b6a5f">没命中再退 ASN / rDNS。</text>
+
+            <rect x="996" y="70" width="150" height="92" rx="12" fill="rgba(120,140,93,0.16)" stroke="#788c5d"/>
+            <circle cx="1022" cy="96" r="12" fill="#788c5d"/>
+            <text x="1022" y="101" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">6</text>
+            <text x="1044" y="101" font-size="14.5" font-weight="600" fill="#141413">诊断整形</text>
+            <text x="1012" y="126" font-size="12" fill="#6b6a5f">跑诊断规则，整形成</text>
+            <text x="1012" y="144" font-size="12" fill="#6b6a5f">界面要的字典。</text>
+
+            <line x1="184" y1="116" x2="206" y2="116" stroke="#8d8b80" stroke-width="2" marker-end="url(#a3)"/>
+            <line x1="380" y1="116" x2="402" y2="116" stroke="#8d8b80" stroke-width="2" marker-end="url(#a3)"/>
+            <line x1="576" y1="116" x2="598" y2="116" stroke="#8d8b80" stroke-width="2" marker-end="url(#a3)"/>
+            <line x1="772" y1="116" x2="794" y2="116" stroke="#8d8b80" stroke-width="2" marker-end="url(#a3)"/>
+            <line x1="968" y1="116" x2="990" y2="116" stroke="#8d8b80" stroke-width="2" marker-end="url(#a3)"/>
+
+            <!-- 标注 -->
+            <text x="16" y="40" font-size="12.5" font-weight="700" fill="#A94F31" letter-spacing="1.4">采集 · 每轮都跑</text>
+            <text x="800" y="40" font-size="12.5" font-weight="700" fill="#3E6E9E" letter-spacing="1.4">带缓存</text>
+            <text x="996" y="40" font-size="12.5" font-weight="700" fill="#5d6b46" letter-spacing="1.4">纯计算</text>
+
+            <!-- 落盘 -->
+            <rect x="408" y="210" width="364" height="76" rx="12" fill="#141413"/>
+            <text x="430" y="240" font-size="14.5" font-weight="600" fill="#faf9f5">落盘：一天一个 JSONL 文件</text>
+            <text x="430" y="262" font-size="12" fill="#b0aea5">每轮一条精简记录（约 1 KB），只留结论要用的字段。</text>
+            <text x="430" y="278" font-size="12" fill="#b0aea5">在 .gitignore 里 —— 采样产物就是你的网络长什么样。</text>
+            <line x1="590" y1="166" x2="590" y2="204" stroke="#8d8b80" stroke-width="2" marker-end="url(#a3)"/>
+
+            <rect x="800" y="210" width="346" height="76" rx="12" fill="#fff" stroke="#e8e6dc"/>
+            <text x="822" y="240" font-size="14.5" font-weight="600" fill="#141413">推送：SSE 一条长连接</text>
+            <text x="822" y="262" font-size="12" fill="#6b6a5f">采样在后台线程，界面不阻塞。</text>
+            <text x="822" y="278" font-size="12" fill="#6b6a5f">断了自己重连，不丢面板状态。</text>
+            <line x1="1070" y1="166" x2="1070" y2="204" stroke="#8d8b80" stroke-width="2" marker-end="url(#a3)"/>
+
+            <text x="16" y="320" font-size="12.5" fill="#6b6a5f">第 2 步是唯一发出网请求的一步。第 5 步会打第三方数据源，但结果缓存 24 小时。</text>
+            <text x="16" y="340" font-size="12.5" fill="#6b6a5f">路径质量（mtr）不在这条链上 —— 它要跑好几秒，做成了按需触发的独立接口。</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        整条链最长的一步是第 2 步，因为要等真实的网络往返。三条路径之间是并行的，
+        所以一轮的耗时接近「最慢的那一条路径」，而不是三条相加。
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 设计取舍 ═══════════════════════ -->
+<section class="arch-section anth-section--subtle">
+  <div class="anth-container anth-container--wide">
+    <h2 id="decisions">三、七条设计取舍</h2>
+    <p>
+      每一条都是「选了 A 而不是 B」，以及<strong>不这么做会怎样</strong>。
+      改代码时如果要推翻其中一条，先看看这里写的代价还在不在。
+    </p>
+
+    <div class="decision">
+      <span class="decision__num">1</span>
+      <div>
+        <h3 class="decision__title" style="margin-top:0;">监控默认关闭，而不是打开页面就开始采</h3>
+        <p class="decision__why">
+          一个专门监控网络流量的工具，在你没同意之前就开始发请求，它的可信度当场就没了。
+          所以空状态不是占位符，<strong>它是页面在如实说「我到目前为止什么都没做」</strong>。
+          代价是多一次点击，换来的是这个工具可以被放心地装在一台不属于你的机器上。
+        </p>
+      </div>
+    </div>
+
+    <div class="decision">
+      <span class="decision__num">2</span>
+      <div>
+        <h3 class="decision__title" style="margin-top:0;">三张卡，而不是一个「你的出口 IP」大标题</h3>
+        <p class="decision__why">
+          任何装了代理的机器上，三个入口读的是不同的配置文件，可以从不同国家出去。
+          一个大标题必须<strong>挑一个</strong>显示，那它对另外两个就是错的 ——
+          而这个工具存在的全部理由，就是那个「不一样」。
+        </p>
+      </div>
+    </div>
+
+    <div class="decision">
+      <span class="decision__num">3</span>
+      <div>
+        <h3 class="decision__title" style="margin-top:0;">对遥测接入点只做 TLS 握手，绝不发 HTTP 请求</h3>
+        <p class="decision__why">
+          往别人的遥测接入点写数据，等于污染他们的数据，也把这个监控工具变成了一个上报源。
+          <strong>握手已经能回答「通不通、多快」</strong>，那就到此为止。
+          界面上这一句也写出来了 —— 使用者有权知道这个工具对第三方做了什么。
+        </p>
+      </div>
+    </div>
+
+    <div class="decision">
+      <span class="decision__num">4</span>
+      <div>
+        <h3 class="decision__title" style="margin-top:0;">四段延迟分开量，而不是给一个总数</h3>
+        <p class="decision__why">
+          「慢」有四种完全不同的原因，修法也完全不同：DNS 慢换解析器，TCP 慢换出口节点，
+          TLS 慢多半是链路丢包重传，首字节慢是服务端或中间代理在等。
+          <strong>一个总数无法告诉你是哪一种</strong>，于是人只能瞎换节点。
+        </p>
+      </div>
+    </div>
+
+    <div class="decision">
+      <span class="decision__num">5</span>
+      <div>
+        <h3 class="decision__title" style="margin-top:0;">静态提取遥测字段，不解密 TLS</h3>
+        <p class="decision__why">
+          静态提取只能知道「<strong>会</strong>发哪些字段」，不知道「某一次<strong>具体</strong>发了什么值」。
+          后者要装一个根 CA —— 而根 CA 私钥一旦泄露，本机所有 HTTPS 都可被解密。
+          <strong>这个代价大于收益</strong>，所以本仓不做，也不提供做这件事的工具。
+          能给的答案边界写清楚，比给一个越界的答案更有用。
+        </p>
+      </div>
+    </div>
+
+    <div class="decision">
+      <span class="decision__num">6</span>
+      <div>
+        <h3 class="decision__title" style="margin-top:0;">历史存精简记录，不存整份采样</h3>
+        <p class="decision__why">
+          一份完整采样约 15 KB，精简记录约 1 KB。挂一个月的差别是 400 MB 和 30 MB。
+          精简记录只留结论要用的字段，代价是<strong>历史看板答不了「三周前那一轮的第七个域名 TTFB 是多少」</strong>——
+          但那个问题没人问。想留全量的人可以加 <code>--persist</code>，那份文件在 gitignore 里。
+        </p>
+      </div>
+    </div>
+
+    <div class="decision">
+      <span class="decision__num">7</span>
+      <div>
+        <h3 class="decision__title" style="margin-top:0;">demo 页复用真实界面，不另写一套</h3>
+        <p class="decision__why">
+          <a href="demo.html">这个站上的 demo</a> 用的就是 <code>web/index.html</code> 和 <code>web/app.js</code> 本身，
+          只是把三个接口换成了内置的一轮虚构采样。所以它<strong>不会随时间和真实界面走偏</strong> ——
+          一个和产品长得不一样的 demo 比没有 demo 更糟。
+          代价是生成脚本要做一次 fetch 替换，那段代码在 <code>scripts/build_docs.py</code> 里，有注释。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 扩展点 ═══════════════════════ -->
+<section class="arch-section">
+  <div class="anth-container anth-container--wide">
+    <h2 id="extend">四、想加东西的话，入口在哪</h2>
+
+    <div class="table-wrap">
+      <table class="anth-table">
+        <thead>
+          <tr><th>你想加</th><th>改哪个文件</th><th>要注意</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>一个 Claude 域名</td>
+            <td><code>cem/endpoints.py</code></td>
+            <td>必须带 <code>evidence</code>（怎么知道的），不是 Claude 的要标 <code>baseline=True</code>，否则会污染结论</td>
+          </tr>
+          <tr>
+            <td>一个数据源</td>
+            <td>采集层新建一个模块</td>
+            <td>拿不到返回 <code>None</code> 不抛异常；并在 <a href="07-datasources.html">数据源</a>里加一行，写明能撑到哪一档置信度</td>
+          </tr>
+          <tr>
+            <td>一条诊断规则</td>
+            <td><code>cem/diagnose.py</code></td>
+            <td>判据 / 成因 / 下一步三样缺一不可；测试要同时断言「该触发时触发」和「不该触发时不触发」</td>
+          </tr>
+          <tr>
+            <td>一个界面面板</td>
+            <td><code>web/index.html</code> + <code>web/app.js</code></td>
+            <td>节点用 <code>el()</code> 造（外部输入拼 innerHTML 就是 XSS）；文案双语；<code>atl-</code> 前缀的样式别改</td>
+          </tr>
+          <tr>
+            <td>Linux 支持</td>
+            <td><code>cem/paths.py</code> · <code>cem/sockets.py</code></td>
+            <td>核心探测本来就能跑，卡住的是「读系统代理」和「列进程连接」两块 macOS 命令</td>
+          </tr>
+          <tr>
+            <td>一章文档</td>
+            <td><code>docs/*.md</code></td>
+            <td>写完跑 <code>python3 scripts/build_docs.py</code>，把 <code>.md</code> 和生成的 <code>.html</code> 一起提交</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>为什么没有 CI</h3>
+    <p>
+      文档站的 HTML 是<strong>生成后提交进仓库</strong>的，不靠 GitHub Actions 构建。
+      这样 fork 的人开个 Pages 就能用，不需要配任何东西，也不需要给 token 加权限。
+      代价是改 <code>.md</code> 之后必须记得跑一次生成器 ——
+      <code>python3 scripts/build_docs.py --check</code> 可以检查有没有忘。
+    </p>
+
+    <div class="chapter__nav" style="margin-top:var(--space-8);">
+      <a class="anth-link" href="index.html">← 回首页</a>
+      <a class="anth-link" href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">读 CONTRIBUTING →</a>
+    </div>
+  </div>
+</section>
+
+<footer class="anth-footer">
+  <div class="anth-footer-grid">
+    <div class="anth-footer-group"><h5>原理</h5>
+      <a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a>
+      <a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a>
+    </div>
+    <div class="anth-footer-group"><h5>动手</h5>
+      <a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a>
+      <a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a>
+    </div>
+    <div class="anth-footer-group"><h5>仓库</h5>
+      <a href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">源码</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">参与维护</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可</a>
+    </div>
+    <div class="anth-footer-group"><h5>看一眼</h5>
+      <a href="demo.html">成品界面</a><a href="architecture.html">架构与设计</a><a href="index.html">首页</a>
+    </div>
+  </div>
+  <div class="anth-footer-legal">
+    全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址 ·
+    文档与截图中的地址取自 RFC 5737 文档保留段
+  </div>
+</footer>
+
+<!-- design-review:self-diff v1
+Skill: anthropic
+Page-type: feature-deep
+Created: 2026-08-15
+
+Decisions (6):
+1. [layer-boundary-is-one-question] chose "the layer split is drawn on 'does this module touch the outside world' alone" over "split by feature area (egress / telemetry / latency)". Because: the boundary has to be mechanically checkable for the test suite to stay fully offline, and 'touches the network' is checkable while 'is about egress' is a judgement call that drifts.
+2. [module-boxes-carry-filenames-not-concepts] chose "every box in the architecture diagram is a real filename in JetBrains Mono" over "conceptual box labels". Because: this page exists so someone can change the code — a box called 'Resolution subsystem' costs the reader one more lookup, while `resolve.py` is where they type next.
+3. [round-diagram-marks-the-one-networked-step] chose "annotate which of the six steps actually leaves the machine" over "a uniform six-step flow". Because: the single most common question about a monitoring tool is what it sends and when. Answering it inside the flow diagram is stronger than a privacy paragraph elsewhere.
+4. [decisions-state-the-cost] chose "each of the seven decisions names what it gives up" over "listing the benefits". Because: a maintainer proposing to reverse one of these needs to know the price that was paid, and a benefit-only list reads as marketing rather than an engineering record.
+5. [extension-table-over-prose] chose "a three-column table of want / file / gotcha" over "a prose walkthrough per extension point". Because: this is lookup content, read by someone who already knows what they want to add — the gotcha column is the only part they cannot get from reading the source.
+6. [monolingual-with-the-gap-named-on-the-home-page] chose "this page is Chinese only" over "bilingual". Because: machine-translating a design record produces text that reads plausible and is subtly wrong about intent, which is worse than an honest scope statement — the home page names the gap and invites translation PRs.
+
+Known trade-offs:
+- Two diagrams sit above 1100px wide, so on narrow screens they scroll horizontally inside their frame rather than reflowing. Shrinking the labels to fit was the alternative and would have made both unreadable.
+- The module count in the prose ("二十四个模块") is written by hand and will drift if modules are added; the diagram is the source of truth and the number is deliberately approximate in the heading rather than repeated in the body.
+- Fonts load from Google Fonts — one request to a third party on a site about outbound traffic. The page renders on the fallback stack if blocked.
+/design-review:self-diff -->
+
+</body>
+</html>

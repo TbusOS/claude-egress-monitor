@@ -189,3 +189,7 @@ Claude Code 的发版节奏很快。表里的版本号写在 `cem/endpoints.py`
 升级之后重新对账，只要跑第一节那三条 `strings` 命令，
 和 `python3 -m cem endpoints` 的输出比一遍即可。有出入就改 `endpoints.py`
 —— 改的时候记得**先解析一次确认域名真实存在**。
+
+---
+
+[← 回到目录](index.html) · [遥测 →](02-telemetry.md)

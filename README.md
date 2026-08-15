@@ -14,6 +14,10 @@ claude.ai —— 同一台机器上，这三个入口的出口 IP 和落地地�
 两个入口的出口不一致时**具体该改哪一行配置**，以及长期开着监控之后
 **按天归档的历史看板**（可选、可删）。
 
+**📖 文档站：<https://tbusos.github.io/claude-egress-monitor/>** ·
+**🖥 可点的成品界面：<https://tbusos.github.io/claude-egress-monitor/demo.html>** ·
+**🧩 架构与设计：<https://tbusos.github.io/claude-egress-monitor/architecture.html>**
+
 ![总览](docs/img/overview.jpg)
 
 *（截图是 `--demo` 模式，地址取自 RFC 5737 文档保留段，不是任何人的真实数据。）*
@@ -93,6 +97,25 @@ python3 -m cem serve --demo --open      # 注入虚构数据，一个探测都�
 
 ![延迟](docs/img/latency.jpg)
 
+**路径质量**（需要装 `mtr`）— 逐跳延迟与丢包，回答四段延迟答不了的那个问题：
+TLS 忽快忽慢是距离远还是链路在丢包。
+
+一个按钮把**所有** Claude 域名加对照组测一遍，或者打开**自动探测**让它
+按 1 / 5 / 15 分钟自己跑（默认关闭 —— 这是本工具唯一会主动发 ICMP 的地方）。
+一遍要一到两分钟，所以它有自己的开关和间隔，不跟着主监控走；跑的时候按钮上
+有 `N/M` 进度，结果一条一条冒出来。**解析到同一个地址的域名只测一次**，
+重复测七遍同一条路径不会多出任何信息。
+
+这一屏最重要的是**丢包的读法**，三条：
+
+- 中间跳的丢包大多是路由器给 ICMP 限速造成的假象，所以显示成灰的，
+  只有终点的丢包能当真；
+- 终点一个包都不回时写「**量不出来**」，不写「丢包 100%」——
+  后者会让人去换节点，换完还是 100%；
+- 目标解析到 fake-ip 占位地址时**直接拒测并说明原因**。硬测会得到一个
+  一跳、零点几毫秒的漂亮结果，那是本机分流器自己应答的 ——
+  这种假数字比没有数字危险得多。
+
 **诊断与建议** — 每条都带**判据**（算出它的实测数字）、**成因**（不是现象的复述）、
 **下一步**（可以直接照做的命令或配置）。旁边是环境检查：IPv6 可达性、系统时钟偏移、
 TLS 证书有没有被中间人拆开、两个权威 DNS 源是否一致、代理端口有没有进程在听。
@@ -145,6 +168,7 @@ cem serve [选项]            启动网页界面
 | `--no-sockets` | 不调用 `lsof`，跳过实时连接 |
 | `--no-dns` | 跳过解析对账 |
 | `--no-telemetry` | 不探测遥测 intake 域名 |
+| `--path-quality` | 每轮顺带跑一次 `mtr`（慢，需要装 mtr；界面上那个面板是按需触发的，不受这个开关影响） |
 | `--all` | 连可选域名（MCP 之类）一起探测 |
 
 ---
@@ -259,6 +283,44 @@ Datadog 是一家做监控 / 可观测性的美国 SaaS 公司。软件把自己
 | [04-latency.md](docs/04-latency.md) | 四段延迟怎么读，哪些推断不能做 |
 | [05-privacy.md](docs/05-privacy.md) | 这个工具自己做什么、不做什么 |
 | [06-toolbox.md](docs/06-toolbox.md) | 全部检测手段清单；为什么不用逆向工具，以及解密的代价 |
+| [07-datasources.md](docs/07-datasources.md) | **每个结论从哪来**：数据源地址、更新频率、缓存、许可、撑到哪一档置信度 |
+| [08-deploy.md](docs/08-deploy.md) | 安装、命令、界面参数、launchd 长期运行、数据存哪怎么删、怎么卸载 |
+| [架构与设计](https://tbusos.github.io/claude-egress-monitor/architecture.html) | 模块分层、一轮采样的数据流、七条设计取舍 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 模块地图、四条硬规矩、怎么加域名 / 数据源 / 诊断规则 |
+
+同样的内容在文档站上是排过版的 HTML：
+<https://tbusos.github.io/claude-egress-monitor/>。
+站点由 `docs/*.md` 生成，改文档改 `.md` 就行：
+
+```bash
+python3 scripts/build_docs.py           # 重新生成 docs/*.html 和 demo 页
+python3 scripts/build_docs.py --check   # 检查有没有忘了跑
+```
+
+生成器只用标准库，没有构建工具链，也不需要 CI —— fork 之后
+**Settings → Pages → Deploy from a branch → main / `/docs`** 就能用。
+
+---
+
+## 架构
+
+分层的判据只有一条：**这个模块碰不碰外界**。
+
+| 层 | 干什么 | 约束 |
+|---|---|---|
+| **采集层** | 发请求、跑命令、读文件 | 拿不到就返回 `None`，不抛异常 —— 可选增强不该让主流程失败 |
+| **计算层** | 拼采样、诊断、归档 | **纯函数**，不碰网络。176 个测试全落在这一层，一个请求都不发 |
+| **呈现层** | 整形、HTTP、SSE、界面 | 只整形不判断；界面**不发明数字**，没有的值渲染成破折号 |
+
+这条线画得硬，好处是测试套件可以完全离线 ——
+一个需要联网才能跑的测试套件，在没网的时候就等于没有，
+而这个工具恰恰是给网络出问题的人用的。
+
+数据单向流动：呈现层拿不到采集层的对象，只拿计算层整形过的字典。
+所以换前端不用碰采集代码，加数据源不用碰界面。
+
+带图的完整版（模块图 + 一轮采样的数据流 + 七条设计取舍）在
+**[架构与设计](https://tbusos.github.io/claude-egress-monitor/architecture.html)**。
 
 ---
 
@@ -288,8 +350,18 @@ cem/
   pathtrace.py   可选：mtr 路径质量（跳数 / 丢包），没装则降级
   demo.py        虚构演示数据（RFC 5737 保留地址）
 web/
-  index.html     界面（atelier-design 风格）
+  index.html     界面（atelier-design 风格），九个面板
   app.js         SSE 客户端与渲染
+docs/
+  *.md           文档源文件 —— 改文档改这些
+  *.html         生成产物（提交进仓库，GitHub Pages 直接发布）
+  index.html     文档站首页（手写）
+  architecture.html  架构与设计（手写，带 SVG 图）
+  demo.html      成品界面的离线演示（生成，复用真实界面 + 虚构数据）
+scripts/
+  build_docs.py  Markdown → 文档站 HTML + demo 页，纯标准库
+  install-deps.sh  可选：装 mtr
+  quick-egress.sh  不依赖 Python 的最小版本，只用 curl
 tests/           纯函数的单元测试，全部离线
 ```
 
@@ -311,11 +383,29 @@ bash scripts/quick-egress.sh
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -t . -v
 ```
 
-测的是解析器、分类器、分位数这些**纯函数** —— 喂固定输入断言输出，
-全部离线，不发一个请求。网络那一层是薄封装，靠 `cem probe` 端到端验。
+176 个测试，测的是解析器、分类器、分位数、文档生成器这些**纯函数** ——
+喂固定输入断言输出，全部离线，不发一个请求。
+网络那一层是薄封装，靠 `cem probe` 端到端验。
+
+---
+
+## 参与维护
+
+欢迎 issue 和 PR。完整的模块地图、怎么加一个域名 / 一个数据源 / 一条诊断规则，
+都在 **[CONTRIBUTING.md](CONTRIBUTING.md)**。这里先说四条硬规矩 ——
+它们不是风格偏好，是这个工具能不能被信任的前提：
+
+1. **仓库里不能有任何人的本机网络信息。** 出口 IP、代理端口、内网地址、
+   运营商名、城市，包括测试样本和代码注释里。演示数据一律用 RFC 5737 文档保留段。
+2. **不确定的结论必须标成推测。** 四档置信度，判不出就写判不出 ——
+   尤其当猜错的方向不对称时（把机房 IP 猜成家宽会让人以为风险更低）。
+3. **界面不发明数字。** 没有的值渲染成破折号，绝不用 0 或上一轮的值顶上。
+   一个假的 0 会被读成「延迟 0 毫秒」。
+4. **结论只算 Claude 的域名。** 对照组域名（`1.1.1.1`）混进结论会产生假警报，
+   引导人去改一份没问题的配置。假警报比漏报更消耗信任。
 
 ---
 

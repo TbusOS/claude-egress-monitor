@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安装、使用、长期运行 — claude-egress-monitor</title>
+<meta name="description" content="从 git clone 到&quot;挂着跑一个月&quot;的完整流程。">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/anthropic.css">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<nav class="anth-nav"><div class="anth-nav-inner">
+  <a class="brand" href="index.html">claude-egress-monitor</a>
+  <div class="nav-links"><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+  <div class="nav-side">
+    <a href="demo.html">Demo</a>
+    <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div></nav>
+<main class="chapter">
+  <div class="chapter__inner">
+    <aside class="chapter__toc">
+      <span class="chapter__toc-label">本页</span>
+      <a href="#一依赖">一、依赖</a><a href="#二装">二、装</a><a href="#三命令">三、命令</a><a href="#四网页界面">四、网页界面</a><a href="#五长期挂着跑">五、长期挂着跑</a><a href="#六数据存在哪怎么删">六、数据存在哪、怎么删</a><a href="#七部署这份文档站github-pages">七、部署这份文档站（GitHub Pages）</a><a href="#八卸载">八、卸载</a><a href="#九跑测试">九、跑测试</a>
+    </aside>
+    <article class="chapter__body">
+      <span class="anth-badge">第 8 章 · 安装部署</span>
+      <h1 id="安装使用长期运行">安装、使用、长期运行</h1>
+<p>从 <code>git clone</code> 到&quot;挂着跑一个月&quot;的完整流程。</p>
+<hr class="anth-divider">
+<h2 id="一依赖">一、依赖</h2>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>项</th><th>要求</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>Python</td><td><strong>3.9+</strong></td><td>只用标准库，不装任何包</td></tr>
+<tr><td>系统</td><td>macOS</td><td>进程与代理检测依赖 <code>ps</code> / <code>lsof</code> / <code>scutil</code></td></tr>
+<tr><td>root</td><td><strong>不需要</strong></td><td>全程以普通用户运行</td></tr>
+<tr><td>网络</td><td>出网</td><td>探测本身就是它的工作</td></tr>
+</tbody></table></div>
+<p>Linux 上核心探测（出口 IP、延迟、DNS 对账、遥测字段）可以跑， 但&quot;读系统代理&quot;和&quot;列进程连接&quot;两块依赖 macOS 的命令，会降级。 移植的入口在 <code>cem/paths.py</code> 和 <code>cem/sockets.py</code>，欢迎提 PR。</p>
+<hr class="anth-divider">
+<h2 id="二装">二、装</h2>
+<pre><code class="language-bash">git clone https://github.com/TbusOS/claude-egress-monitor.git
+cd claude-egress-monitor
+
+python3 -m cem doctor     # 先看清本机三个入口各走哪条路（不发探测）</code></pre>
+<p><code>doctor</code> 不联网，它只读本机配置。看到三条路径都被识别出来，就说明装好了。</p>
+<h3 id="可选装-mtr-拿路径质量">可选：装 mtr 拿路径质量</h3>
+<pre><code class="language-bash">bash scripts/install-deps.sh</code></pre>
+<p>这个脚本只做一件事：用 Homebrew 装 <code>mtr</code>，然后告诉你怎么给它权限。 它<strong>不会</strong>自己改系统文件权限 —— 那个决定应该由你自己做。</p>
+<p><code>mtr</code> 要发 ICMP 探测包，需要 raw socket，也就是需要 root。两种解法：</p>
+<pre><code class="language-bash"># A. 每次手动跑时加 sudo（不改任何系统状态）
+sudo mtr --json -n -c 5 -- claude.ai
+
+# B. 给辅助程序 setuid，之后普通用户可直接跑（改了系统文件权限，自己权衡）
+sudo chown root $(brew --prefix)/sbin/mtr-packet
+sudo chmod u+s $(brew --prefix)/sbin/mtr-packet</code></pre>
+<p>本工具默认按普通用户调用 —— <strong>一个监控工具不该要求你用 sudo 跑它自己</strong>。 没给权限时路径质量面板显示&quot;未安装/无权限&quot;并给出上面这两条命令， 其余功能完全不受影响。</p>
+<p>装好之后，界面「路径质量」那一屏有两个入口：</p>
+<ul><li><strong>全部测一遍</strong> —— 把所有 Claude 域名加对照组跑一遍，约一到两分钟。 跑的时候按钮上有 <code>N/M</code> 进度，结果一条一条出。</li><li><strong>自动探测</strong>（默认关闭）—— 打开之后按 1 / 5 / 15 分钟自己跑。 它有自己的开关和间隔，不跟着主监控走：主采样一轮几百毫秒， 而一遍 mtr 要一两分钟，混在一起会让&quot;每 30 秒一轮&quot;变成谎话。</li></ul>
+<p>两个地方会<strong>拒测并说明原因</strong>，而不是给一个假数字：</p>
+<ul><li>目标解析到 <strong>fake-ip 占位地址</strong>时。硬测会得到一跳、零点几毫秒的漂亮结果， 那是本机分流器自己应答的，和 Claude 无关。</li><li>终点<strong>一个 ICMP 回包都没有</strong>时，报&quot;量不出丢包率&quot;而不是&quot;丢包 100%&quot;。</li></ul>
+<p>另外，<strong>解析到同一个地址的域名只测一次</strong>（并列出共用它的那些域名）—— 七个域名指向同一套 Anycast 前端时，测七遍不会多出任何信息。</p>
+<hr class="anth-divider">
+<h2 id="三命令">三、命令</h2>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>命令</th><th>做什么</th><th>联网</th></tr></thead>
+<tbody>
+<tr><td><code>python3 -m cem doctor</code></td><td>看清本机三个入口各走哪条路</td><td>否</td></tr>
+<tr><td><code>python3 -m cem probe</code></td><td>立刻采一轮，打印在终端</td><td>是</td></tr>
+<tr><td><code>python3 -m cem probe --json</code></td><td>同上，输出 JSON</td><td>是</td></tr>
+<tr><td><code>python3 -m cem endpoints</code></td><td>打印 Claude 会连的域名清单 + 取证来源</td><td>否</td></tr>
+<tr><td><code>python3 -m cem telemetry</code></td><td>静态提取遥测字段</td><td>否</td></tr>
+<tr><td><code>python3 -m cem serve</code></td><td>起网页界面</td><td>按需</td></tr>
+</tbody></table></div>
+<p>常用参数：</p>
+<pre><code class="language-bash">python3 -m cem probe --all            # 把可选项全打开（含厂商 IP 段、RDAP）
+python3 -m cem probe --no-telemetry   # 跳过遥测目的地探测
+python3 -m cem probe --no-sockets     # 不列本机连接
+python3 -m cem probe --path-quality   # 顺带跑 mtr（慢，要装 mtr）
+python3 -m cem telemetry --all-events # 打印全部事件名而不是前几十个</code></pre>
+<hr class="anth-divider">
+<h2 id="四网页界面">四、网页界面</h2>
+<pre><code class="language-bash">python3 -m cem serve --open</code></pre>
+<p>打开 <a href="http://127.0.0.1:8787/">http://127.0.0.1:8787/</a>。<strong>监控默认是关的</strong> —— 一个监控网络流量的工具，不该在你没同意之前就开始发请求。 在页面右上角的开关打开它，采样间隔可选 10 秒 / 30 秒 / 5 分钟。</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>参数</th><th>默认</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>--host</code></td><td><code>127.0.0.1</code></td><td><strong>只监听回环地址</strong></td></tr>
+<tr><td><code>--port</code></td><td><code>8787</code></td><td></td></tr>
+<tr><td><code>--interval</code></td><td><code>30</code></td><td>采样间隔（秒）</td></tr>
+<tr><td><code>--start</code></td><td>关</td><td>起来就开始采（无人值守时用）</td></tr>
+<tr><td><code>--archive</code></td><td><code>./data/days</code></td><td>按天归档目录</td></tr>
+<tr><td><code>--no-archive</code></td><td>—</td><td>完全不落盘</td></tr>
+<tr><td><code>--demo</code></td><td>关</td><td>注入虚构数据，一个探测都不发</td></tr>
+<tr><td><code>--open</code></td><td>关</td><td>顺手打开浏览器</td></tr>
+</tbody></table></div>
+<h3 id="不要把它暴露到局域网">不要把它暴露到局域网</h3>
+<p>界面上有出口 IP、代理端口、本机连接列表和进程名 —— <strong>这些合起来就是&quot;你的网络长什么样&quot;</strong>。默认只监听回环地址是刻意的。</p>
+<p>真要在另一台机器上看，用 SSH 转发，别改 <code>--host</code>：</p>
+<pre><code class="language-bash">ssh -N -L 8787:127.0.0.1:8787 你的用户名@那台机器
+# 然后在本地浏览器打开 http://127.0.0.1:8787/</code></pre>
+<h3 id="只想看界面长什么样">只想看界面长什么样</h3>
+<pre><code class="language-bash">python3 -m cem serve --demo --open</code></pre>
+<p>演示模式注入一轮完全虚构的采样，地址取自 RFC 5737 文档保留段 （<code>192.0.2.0/24</code>、<code>198.51.100.0/24</code>、<code>203.0.113.0/24</code>）， 一个探测都不发。界面上会显式标出&quot;演示数据&quot;。</p>
+<hr class="anth-divider">
+<h2 id="五长期挂着跑">五、长期挂着跑</h2>
+<h3 id="方式一tmux最简单">方式一：tmux（最简单）</h3>
+<pre><code class="language-bash">tmux new -s cem
+python3 -m cem serve --start --interval 300
+# Ctrl-b d 退出，随时 tmux attach -t cem 回来</code></pre>
+<h3 id="方式二launchd开机自启macos-原生">方式二：launchd（开机自启，macOS 原生）</h3>
+<p>写 <code>~/Library/LaunchAgents/com.local.cem.plist</code>：</p>
+<pre><code class="language-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;!DOCTYPE plist PUBLIC &quot;-//Apple//DTD PLIST 1.0//EN&quot;
+  &quot;http://www.apple.com/DTDs/PropertyList-1.0.dtd&quot;&gt;
+&lt;plist version=&quot;1.0&quot;&gt;
+&lt;dict&gt;
+  &lt;key&gt;Label&lt;/key&gt;            &lt;string&gt;com.local.cem&lt;/string&gt;
+  &lt;key&gt;ProgramArguments&lt;/key&gt;
+  &lt;array&gt;
+    &lt;string&gt;/usr/bin/python3&lt;/string&gt;
+    &lt;string&gt;-m&lt;/string&gt;&lt;string&gt;cem&lt;/string&gt;
+    &lt;string&gt;serve&lt;/string&gt;
+    &lt;string&gt;--start&lt;/string&gt;
+    &lt;string&gt;--interval&lt;/string&gt;&lt;string&gt;300&lt;/string&gt;
+  &lt;/array&gt;
+  &lt;key&gt;WorkingDirectory&lt;/key&gt; &lt;string&gt;/绝对路径/claude-egress-monitor&lt;/string&gt;
+  &lt;key&gt;RunAtLoad&lt;/key&gt;        &lt;true/&gt;
+  &lt;key&gt;KeepAlive&lt;/key&gt;        &lt;true/&gt;
+  &lt;key&gt;StandardOutPath&lt;/key&gt;  &lt;string&gt;/tmp/cem.log&lt;/string&gt;
+  &lt;key&gt;StandardErrorPath&lt;/key&gt;&lt;string&gt;/tmp/cem.err&lt;/string&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;</code></pre>
+<pre><code class="language-bash">launchctl load ~/Library/LaunchAgents/com.local.cem.plist   # 启用
+launchctl unload ~/Library/LaunchAgents/com.local.cem.plist # 停用</code></pre>
+<p>长期跑请把 <code>--interval</code> 调到 300 秒以上。30 秒是给&quot;正在排查&quot;用的， 挂一个月的话它会白发几十万次请求。</p>
+<hr class="anth-divider">
+<h2 id="六数据存在哪怎么删">六、数据存在哪、怎么删</h2>
+<pre><code>data/
+├── days/2026-08-15.jsonl   ← 按天一个文件，每轮一条精简记录（约 1 KB）
+├── asn-cache.json          ← ASN 查询缓存
+└── cloud-ranges.json       ← 厂商官方 IP 段缓存（24 小时）</code></pre>
+<p>一整天 5 分钟一轮 ≈ 288 条 ≈ <strong>300 KB</strong>。</p>
+<p><strong>这些文件全部在 <code>.gitignore</code> 里</strong>，因为采样产物就是你的网络长什么样。 提交上去等于把自己的出口、代理端口、内网地址公开。</p>
+<p>界面「历史看板」里可以选看哪几天、也可以<strong>删掉哪几天</strong>。 命令行直接删也行：</p>
+<pre><code class="language-bash">rm data/days/2026-08-1*.jsonl     # 删某几天
+rm -rf data/                      # 全清（缓存会自己重建）</code></pre>
+<hr class="anth-divider">
+<h2 id="七部署这份文档站github-pages">七、部署这份文档站（GitHub Pages）</h2>
+<p><code>docs/</code> 目录本身就是 Pages 的站点根。章节 HTML 由 Markdown 生成：</p>
+<pre><code class="language-bash">python3 scripts/build-docs.py      # docs/*.md → docs/*.html，并生成 demo 页</code></pre>
+<p>生成器只用标准库，没有构建工具链。改文档的正确姿势是<strong>改 <code>.md</code>， 然后跑一次这个脚本</strong>，把生成的 <code>.html</code> 一起提交 —— 这样 Pages 不需要 CI 就能更新。</p>
+<p>在自己的 fork 上开 Pages：仓库 <strong>Settings → Pages → Source: Deploy from a branch → Branch: <code>main</code> / 目录 <code>/docs</code></strong>。</p>
+<hr class="anth-divider">
+<h2 id="八卸载">八、卸载</h2>
+<pre><code class="language-bash"># 停掉 launchd（如果配过）
+launchctl unload ~/Library/LaunchAgents/com.local.cem.plist
+rm ~/Library/LaunchAgents/com.local.cem.plist
+
+# 删仓库和数据
+rm -rf claude-egress-monitor
+
+# 如果给 mtr 加过 setuid，想还原：
+sudo chmod u-s $(brew --prefix)/sbin/mtr-packet
+sudo chown $(whoami) $(brew --prefix)/sbin/mtr-packet</code></pre>
+<p>工具不写系统配置、不装 CA 证书、不改网络设置、不注册后台服务 （除非你自己配了 launchd）。删掉目录就干净了。</p>
+<hr class="anth-divider">
+<h2 id="九跑测试">九、跑测试</h2>
+<pre><code class="language-bash">python3 -m unittest discover -s tests -t . -v</code></pre>
+<p>全部离线，不发任何请求 —— 解析器都写成了纯函数，喂固定样本。 改代码前先跑一遍，改完再跑一遍。</p>
+      <div class="chapter__nav"><a class="anth-link" href="07-datasources.html">← 数据源</a><a class="anth-link" href="demo.html">看成品界面 →</a></div>
+    </article>
+  </div>
+</main>
+<footer class="anth-footer">
+  <div class="anth-footer-grid">
+    <div class="anth-footer-group"><h5>原理</h5><a href="01-endpoints.html">出网域名</a><a href="02-telemetry.html">遥测</a><a href="03-routing.html">出口为什么不同</a><a href="04-latency.html">延迟</a></div>
+    <div class="anth-footer-group"><h5>动手</h5><a href="05-privacy.html">隐私边界</a><a href="06-toolbox.html">工具箱</a><a href="07-datasources.html">数据源</a><a href="08-deploy.html">安装部署</a></div>
+    <div class="anth-footer-group"><h5>仓库</h5>
+      <a href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">源码</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">参与维护</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/LICENSE" target="_blank" rel="noopener">MIT 许可</a>
+    </div>
+    <div class="anth-footer-group"><h5>看一眼</h5>
+      <a href="demo.html">成品界面</a>
+      <a href="architecture.html">架构与设计</a>
+      <a href="index.html">首页</a>
+    </div>
+  </div>
+  <div class="anth-footer-legal">
+    全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址 ·
+    文档与截图中的地址取自 RFC 5737 文档保留段
+  </div>
+</footer>
+</body>
+</html>

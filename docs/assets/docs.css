@@ -1,0 +1,314 @@
+/* 文档站自己的样式，叠在 anthropic.css 之上。
+ *
+ * 命名规矩：anth- 前缀的一律属于 anthropic-design 那套 skill，这里不碰；
+ * 本站自己的一律**无前缀**（.chapter、.table-wrap、.ref-card…）。
+ *
+ * 中文正文不用 Lora —— 那是拉丁衬线体，中文会掉到系统字体上，
+ * 和标题的字重对不齐。中文正文走系统无衬线栈，标题保留 Poppins
+ * （中文部分同样回退），这样中英混排时字重是连续的。
+ */
+
+html[lang="zh-CN"] body,
+html[lang="zh-CN"] p,
+html[lang="zh-CN"] li,
+html[lang="zh-CN"] td,
+html[lang="zh-CN"] th,
+html[lang="zh-CN"] blockquote {
+  font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
+               "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* ── 顶栏 ───────────────────────────────────────────────────────────── */
+
+.anth-nav-inner .brand {
+  font-family: var(--font-mono);
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--anth-text);
+  text-decoration: none;
+  flex: none;
+}
+.nav-links {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.nav-links a {
+  font-family: var(--font-heading);
+  font-size: 13.5px;
+  color: var(--anth-text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.nav-links a:hover { color: var(--anth-orange-ink); }
+.nav-side { display: flex; gap: var(--space-4); align-items: center; flex: none; }
+.nav-side > a:not(.anth-button) {
+  font-family: var(--font-heading);
+  font-size: 13.5px;
+  color: var(--anth-text-secondary);
+  text-decoration: none;
+}
+
+@media (max-width: 900px) {
+  .nav-links { display: none; }
+}
+
+/* ── 章节页版式 ─────────────────────────────────────────────────────── */
+
+.chapter { padding: var(--space-8) 0 var(--space-9); }
+.chapter__inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+
+/* 目录跟着滚。它是章节页唯一的导航手段 —— 这些章节都在两三千字，
+   没有目录就只能靠滚轮找东西。 */
+.chapter__toc {
+  position: sticky;
+  top: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-right: var(--space-4);
+  border-right: 1px solid var(--anth-light-gray);
+}
+.chapter__toc-label {
+  font-family: var(--font-heading);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--anth-orange-ink);
+}
+.chapter__toc a {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--anth-text-secondary);
+  text-decoration: none;
+}
+.chapter__toc a:hover { color: var(--anth-orange-ink); }
+.chapter__toc-empty { font-size: 12.5px; color: var(--anth-mid-gray); }
+
+.chapter__body { min-width: 0; max-width: 78ch; }
+.chapter__body h1 {
+  font-family: var(--font-heading);
+  font-size: 40px;
+  line-height: 1.18;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: var(--space-4) 0 var(--space-6);
+}
+.chapter__body h2 {
+  font-family: var(--font-heading);
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: var(--space-8) 0 var(--space-4);
+  scroll-margin-top: var(--space-6);
+}
+.chapter__body h3 {
+  font-family: var(--font-heading);
+  font-size: 18.5px;
+  font-weight: 600;
+  margin: var(--space-6) 0 var(--space-3);
+  scroll-margin-top: var(--space-6);
+}
+.chapter__body h4 {
+  font-family: var(--font-heading);
+  font-size: 15.5px;
+  font-weight: 600;
+  margin: var(--space-5) 0 var(--space-2);
+}
+.chapter__body p { font-size: 15.5px; line-height: 1.78; margin: 0 0 var(--space-4); }
+.chapter__body li { font-size: 15.5px; line-height: 1.75; margin-bottom: 7px; }
+.chapter__body ul, .chapter__body ol { margin: 0 0 var(--space-4); padding-left: 1.35em; }
+.chapter__body a { color: var(--anth-orange-ink); }
+.chapter__body strong { font-weight: 700; }
+
+.chapter__body code {
+  font-family: var(--font-mono);
+  font-size: 0.87em;
+  background: var(--anth-bg-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+
+.chapter__body pre {
+  background: #141413;
+  color: #e9e6db;
+  padding: var(--space-5);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin: 0 0 var(--space-5);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.chapter__body pre code {
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  color: inherit;
+  overflow-wrap: normal;
+}
+
+.chapter__body blockquote {
+  border-left: 3px solid var(--anth-orange);
+  background: var(--anth-bg-subtle);
+  margin: 0 0 var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 14.5px;
+  line-height: 1.72;
+}
+
+/* 宽表格自己横向滚，页面本体永远不出现横向滚动条 */
+.table-wrap { overflow-x: auto; margin: 0 0 var(--space-5); }
+.chapter__body table { font-size: 14px; min-width: 100%; }
+.chapter__body th, .chapter__body td { vertical-align: top; line-height: 1.6; }
+
+.chapter__body hr.anth-divider { margin: var(--space-7) 0; }
+
+.chapter__nav {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--anth-light-gray);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 860px) {
+  .chapter__inner { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+  .chapter__toc {
+    position: static;
+    border-right: 0;
+    border-bottom: 1px solid var(--anth-light-gray);
+    padding: 0 0 var(--space-4);
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--space-3) var(--space-4);
+    align-items: baseline;
+  }
+  .chapter__body h1 { font-size: 31px; }
+  .chapter__body h2 { font-size: 22px; }
+}
+
+/* ── 首页用的组件 ───────────────────────────────────────────────────── */
+
+.ref-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+.ref-card {
+  background: #fff;
+  border: 1px solid var(--anth-light-gray);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  text-decoration: none;
+  color: var(--anth-text);
+  transition: border-color var(--duration-sm) var(--ease-anth);
+}
+.ref-card:hover { border-color: var(--anth-orange-ink); }
+.ref-card__num {
+  font-family: var(--font-heading);
+  font-size: 11.5px;
+  letter-spacing: 0.14em;
+  color: var(--anth-orange-ink);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.ref-card__name {
+  font-family: var(--font-heading);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: var(--space-2) 0;
+}
+.ref-card__desc {
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--anth-text-secondary);
+  margin: 0;
+  flex: 1;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+.stat-cell__num {
+  display: block;
+  font-family: var(--font-heading);
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+.stat-cell__label {
+  display: block;
+  font-size: 13.5px;
+  color: var(--anth-text-secondary);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.shot {
+  border: 1px solid var(--anth-light-gray);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #fff;
+  display: block;
+}
+/* 整页截图是竖长条（一屏 1440×6000 那种）。原尺寸放进两栏会把版面撑垮，
+   所以裁到固定高度、贴顶显示 —— 看得出是哪个面板就够了，
+   要细看应该去点 demo，那是能交互的真界面。 */
+.shot img {
+  display: block; width: 100%; height: auto;
+  max-height: 460px; object-fit: cover; object-position: top center;
+}
+.shot__cap {
+  font-size: 13px;
+  color: var(--anth-text-secondary);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--anth-light-gray);
+  line-height: 1.6;
+}
+
+figure { margin: 0 0 var(--space-6); }
+figcaption {
+  font-size: 13px;
+  color: var(--anth-text-secondary);
+  line-height: 1.65;
+  margin-top: var(--space-3);
+}
+
+.diagram-frame {
+  background: #fff;
+  border: 1px solid var(--anth-light-gray);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  overflow-x: auto;
+}
+.diagram-frame svg { display: block; max-width: 100%; height: auto; }
+
+@media (max-width: 940px) {
+  .ref-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .ref-grid { grid-template-columns: minmax(0, 1fr); }
+}

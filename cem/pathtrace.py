@@ -24,11 +24,13 @@ setuid 的辅助程序解决了这个问题，装一次就能以普通用户跑�
 from __future__ import annotations
 
 import json
-import re
 import shutil
+import socket
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
+
+from .resolve import is_fake_ip, is_private
 
 MTR_BIN_CANDIDATES = ("mtr", "/opt/homebrew/sbin/mtr", "/usr/local/sbin/mtr",
                       "/usr/sbin/mtr", "/usr/bin/mtr")
@@ -74,6 +76,21 @@ class Hop:
         """
         return self.loss_pct >= LOSS_WARN_PCT
 
+    @property
+    def answered(self) -> bool:
+        """这一跳至少回过一个包。没回过就没有地址，也没有可信的延迟。"""
+        return self.host is not None and self.loss_pct < 100.0
+
+    @property
+    def is_private(self) -> bool:
+        """内网 / 回环 / CGNAT（含 Tailscale 的 100.64/10）。
+
+        路径前几跳是内网地址很正常（家里的路由器）。但如果**中间**突然
+        冒出内网地址，说明流量进了一条隧道 —— 从那一跳起量到的就不是
+        "到 Claude 的路"了。
+        """
+        return bool(self.host) and is_private(self.host)
+
 
 @dataclass(frozen=True)
 class PathReport:
@@ -81,6 +98,7 @@ class PathReport:
     ok: bool
     hops: tuple[Hop, ...] = ()
     error: Optional[str] = None
+    resolved: Optional[str] = None       # mtr 实际打向的地址
 
     @property
     def hop_count(self) -> int:
@@ -91,13 +109,54 @@ class PathReport:
         return self.hops[-1] if self.hops else None
 
     @property
+    def endpoint_silent(self) -> bool:
+        """终点一个包都没回过。
+
+        **这不等于链路在丢包。** 大量主机在防火墙上直接丢掉 ICMP echo，
+        TUN 模式下的 fake-ip 占位地址更是压根不存在于网络上 —— 两种情况
+        都会显示"终点 100% 丢包"，而真实的 TCP 流量完全正常。
+
+        把它当成丢包报出去，读者会去换节点、换机场，换完还是 100%。
+        所以这一档必须单独存在：**丢包率量不出来**，而不是"丢包 100%"。
+        """
+        final = self.final
+        return bool(final and not final.answered)
+
+    @property
     def end_to_end_loss(self) -> Optional[float]:
-        """终点丢包率 —— 这才是"这条链路丢不丢包"的答案。"""
+        """终点丢包率 —— 这才是"这条链路丢不丢包"的答案。
+
+        终点从没回过包时返回 None（测不出来），而不是 100.0。
+        原始的 100% 仍然留在那一跳的 `loss_pct` 上，不隐瞒。
+        """
+        if self.endpoint_silent:
+            return None
         return self.final.loss_pct if self.final else None
 
     @property
     def jitter_ms(self) -> Optional[float]:
+        if self.endpoint_silent:
+            return None
         return self.final.stdev_ms if self.final else None
+
+    @property
+    def resolved_kind(self) -> str:
+        """mtr 打向的那个地址是什么性质。fake-ip 时整份报告都要改读法。"""
+        if not self.resolved:
+            return "unknown"
+        if is_fake_ip(self.resolved):
+            return "fake-ip"
+        if is_private(self.resolved):
+            return "private"
+        return "real"
+
+    @property
+    def last_answering(self) -> Optional[Hop]:
+        """最后一个回过包的跳。终点不吭声时，路径只到这里为止。"""
+        for hop in reversed(self.hops):
+            if hop.answered:
+                return hop
+        return None
 
 
 def parse_mtr_json(payload: str) -> tuple[Hop, ...]:
@@ -143,6 +202,40 @@ def parse_mtr_json(payload: str) -> tuple[Hop, ...]:
     return tuple(out)
 
 
+def resolve_once(target: str) -> Optional[str]:
+    """target 解析到哪个地址。失败返回 None —— 这一项是加分信息，不能拖垮探测。
+
+    单独解析一次而不是从 mtr 输出里读，是因为终点不回包时 mtr 根本不会
+    打印目标地址，而"打向的是不是一个 fake-ip 占位地址"恰恰是那种情况下
+    最需要知道的一件事。
+    """
+    try:
+        infos = socket.getaddrinfo(target, None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError, UnicodeError):
+        return None
+    for info in infos:
+        addr = info[4][0]
+        if addr:
+            return str(addr)
+    return None
+
+
+# 打向 fake-ip 占位地址的路径探测会"成功"，并给出一个 0.4 毫秒、一跳到达
+# 的漂亮结果 —— 那是本机分流器自己应答的，和 Claude 一点关系都没有。
+#
+# 这种假数字比没有数字危险得多：它会让人以为链路好得不得了。
+# 所以这里**拒测并说明原因**，而不是测出来再在旁边写一行小字。
+FAKE_IP_REFUSAL = (
+    "目标解析到 fake-ip 占位地址，这个地址在公网上不存在。"
+    "对它做路径探测只会量到本机的分流器，得出一个一跳、零点几毫秒的假结果，"
+    "所以这里不测。\n"
+    "要量真实路径，三选一：\n"
+    "  A. 在分流器里给这个域名配 real-ip（或关掉 fake-ip），让它解析到真实地址\n"
+    "  B. 直接对你的代理节点地址跑 mtr —— 那才是本机能看见的那一段\n"
+    "  C. 只看「延迟分解」里的 TCP / TLS，那是真实业务流量量出来的，不受 fake-ip 影响"
+)
+
+
 def trace(target: str, *, cycles: int = 5, timeout: float = 40.0) -> PathReport:
     """跑一次 mtr。
 
@@ -153,24 +246,29 @@ def trace(target: str, *, cycles: int = 5, timeout: float = 40.0) -> PathReport:
     if not binary:
         return PathReport(target=target, ok=False,
                           error="未安装 mtr；跑 scripts/install-deps.sh 装它")
+    resolved = resolve_once(target)
+    if resolved and is_fake_ip(resolved):
+        return PathReport(target=target, ok=False, resolved=resolved,
+                          error=FAKE_IP_REFUSAL)
     # -n 不做反向解析（快很多，而且我们自己有 rDNS 查询）
     args = [binary, "--json", "-n", "-c", str(cycles), "--", target]
     try:
         proc = subprocess.run(args, capture_output=True, text=True,
                               timeout=timeout)
     except subprocess.TimeoutExpired:
-        return PathReport(target=target, ok=False, error="mtr 超时")
+        return PathReport(target=target, ok=False, error="mtr 超时", resolved=resolved)
     except (OSError, subprocess.SubprocessError) as exc:
-        return PathReport(target=target, ok=False,
+        return PathReport(target=target, ok=False, resolved=resolved,
                           error=f"{type(exc).__name__}: {exc}")
     if proc.returncode != 0 and not proc.stdout.strip():
-        return PathReport(target=target, ok=False,
+        return PathReport(target=target, ok=False, resolved=resolved,
                           error=explain_failure(proc.stderr or "",
                                                 proc.returncode))
     hops = parse_mtr_json(proc.stdout)
     if not hops:
-        return PathReport(target=target, ok=False, error="mtr 没有返回可用的跳信息")
-    return PathReport(target=target, ok=True, hops=hops)
+        return PathReport(target=target, ok=False, resolved=resolved,
+                          error="mtr 没有返回可用的跳信息")
+    return PathReport(target=target, ok=True, hops=hops, resolved=resolved)
 
 
 # macOS 上装完 mtr 之后最常见的一堵墙。原始报错是
@@ -201,22 +299,36 @@ def explain_failure(stderr: str, returncode: int) -> str:
 
 
 def summarize(report: PathReport) -> dict:
-    """整形成界面要的形状。"""
+    """整形成界面要的形状。只出事实，读法交给界面（界面是双语的）。"""
+    final = report.final
+    silent = report.endpoint_silent
     return {
         "target": report.target,
         "ok": report.ok,
         "error": report.error,
+        "resolved": report.resolved,
+        "resolved_kind": report.resolved_kind,
         "hop_count": report.hop_count,
+        "endpoint_silent": silent,
         "end_to_end_loss": report.end_to_end_loss,
         "jitter_ms": report.jitter_ms,
-        "final_avg_ms": report.final.avg_ms if report.final else None,
+        # 没回过包时 mtr 会填 0.0。原样透出去就成了"往返 0 毫秒"，
+        # 那是这个仓最忌讳的那种假数字。
+        "final_avg_ms": None if silent else (final.avg_ms if final else None),
+        "last_answering_index": (report.last_answering.index
+                                 if report.last_answering else None),
         "hops": [
             {
                 "index": h.index, "host": h.host, "loss_pct": h.loss_pct,
-                "sent": h.sent, "avg_ms": h.avg_ms, "best_ms": h.best_ms,
-                "worst_ms": h.worst_ms, "stdev_ms": h.stdev_ms,
+                "sent": h.sent,
+                "avg_ms": h.avg_ms if h.answered else None,
+                "best_ms": h.best_ms if h.answered else None,
+                "worst_ms": h.worst_ms if h.answered else None,
+                "stdev_ms": h.stdev_ms if h.answered else None,
+                "answered": h.answered,
+                "private": h.is_private,
                 "meaningful_loss": h.loss_is_meaningful,
-                "last": bool(report.final and h.index == report.final.index),
+                "last": bool(final and h.index == final.index),
             }
             for h in report.hops
         ],
@@ -224,6 +336,7 @@ def summarize(report: PathReport) -> dict:
 
 
 __all__ = [
+    "FAKE_IP_REFUSAL",
     "Hop",
     "LOSS_WARN_PCT",
     "PathReport",
@@ -231,6 +344,7 @@ __all__ = [
     "available",
     "explain_failure",
     "parse_mtr_json",
+    "resolve_once",
     "summarize",
     "trace",
     "which",

@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude-egress-monitor — 看清 Claude 的流量从哪出去</title>
+<meta name="description" content="开源工具：量出 Claude Code、Claude 桌面端、浏览器里 claude.ai 各自的出口 IP 与落地地区，遥测发往哪个地区，延迟分成哪四段，以及出口不一致时具体该改哪一行配置。只用 Python 标准库，全部探测在本机发起。">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/anthropic.css">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  html[data-lang="en"] .lang-zh { display: none !important; }
+  html[data-lang="zh"] .lang-en { display: none !important; }
+  .lang-toggle {
+    background: transparent; border: 1px solid var(--anth-light-gray);
+    color: var(--anth-text); font-family: var(--font-heading);
+    font-size: 13px; font-weight: 500; padding: 6px 12px;
+    border-radius: var(--radius-pill); cursor: pointer; letter-spacing: 0.05em;
+  }
+  .lang-toggle:hover { background: var(--anth-light-gray); }
+
+  .hero-wrap { padding: var(--space-9) 0 var(--space-8); }
+  .hero-wrap h1 {
+    font-family: var(--font-heading); font-size: 58px; line-height: 1.08;
+    font-weight: 600; letter-spacing: -0.03em; margin: var(--space-4) 0 0;
+  }
+  .hero-sub {
+    font-size: 18px; line-height: 1.7; color: var(--anth-text-secondary);
+    margin: var(--space-5) 0 var(--space-6); max-width: 62ch;
+  }
+  .hero-cta { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: center; }
+  .hero-note { font-size: 13px; color: var(--anth-text-secondary); margin-top: var(--space-5); }
+
+  .lead { font-size: 16.5px; line-height: 1.78; max-width: 74ch; }
+  .section-head { margin-bottom: var(--space-6); }
+  .section-head h2 {
+    font-family: var(--font-heading); font-size: 31px; font-weight: 600;
+    letter-spacing: -0.02em; margin: var(--space-3) 0 var(--space-3);
+  }
+
+  .quickstart {
+    background: #fff; border: 1px solid var(--anth-light-gray);
+    border-radius: var(--radius-md); padding: var(--space-7);
+    display: grid; grid-template-columns: 1fr 1.15fr; gap: var(--space-7);
+    align-items: center;
+  }
+  .quickstart pre {
+    background: #141413; color: #e9e6db; padding: var(--space-5);
+    border-radius: var(--radius-sm); font-family: var(--font-mono);
+    font-size: 13px; line-height: 1.75; overflow-x: auto; margin: 0;
+  }
+  /* anthropic.css 给 <code> 配了浅色底和深色字。它落在深色 <pre> 里
+     就是深字压深底 —— 屏幕上那一块看起来是空的。必须显式覆盖。 */
+  .quickstart pre code {
+    background: none; padding: 0; color: inherit;
+    font-family: var(--font-mono); font-size: 13px;
+  }
+  .quickstart pre .com { color: #9c9a8e; }
+  .quickstart pre .cmd { color: #e5936f; font-weight: 500; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-7); align-items: start; }
+  .rule-list { display: flex; flex-direction: column; gap: var(--space-5); }
+  .rule__title {
+    font-family: var(--font-heading); font-size: 16px; font-weight: 600;
+    margin: 0 0 6px; display: block;
+  }
+  .rule__body { font-size: 14.5px; line-height: 1.7; color: var(--anth-text-secondary); margin: 0; }
+
+  @media (max-width: 900px) {
+    .hero-wrap h1 { font-size: 38px; }
+    .quickstart { grid-template-columns: minmax(0, 1fr); padding: var(--space-5); }
+    .two-col { grid-template-columns: minmax(0, 1fr); gap: var(--space-6); }
+  }
+</style>
+</head>
+<body>
+
+<nav class="anth-nav"><div class="anth-nav-inner">
+  <a class="brand" href="index.html">claude-egress-monitor</a>
+  <div class="nav-links">
+    <a href="03-routing.html"><span class="lang-zh">原理</span><span class="lang-en">How</span></a>
+    <a href="architecture.html"><span class="lang-zh">架构</span><span class="lang-en">Architecture</span></a>
+    <a href="07-datasources.html"><span class="lang-zh">数据源</span><span class="lang-en">Data sources</span></a>
+    <a href="08-deploy.html"><span class="lang-zh">部署</span><span class="lang-en">Deploy</span></a>
+    <a href="demo.html">Demo</a>
+  </div>
+  <div class="nav-side">
+    <button type="button" class="lang-toggle" aria-label="切换语言 / Switch language">EN / 中</button>
+    <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div></nav>
+
+<!-- ═══════════════════════════ Hero ═══════════════════════════ -->
+<header class="hero-wrap">
+  <div class="anth-container anth-container--wide">
+    <span class="anth-badge">
+      <span class="lang-zh">开源 · MIT · 只用 Python 标准库</span>
+      <span class="lang-en">Open source · MIT · Python stdlib only</span>
+    </span>
+    <h1>
+      <span class="lang-zh">同一台机器，<br>Claude 的三个入口可以从三个国家出去。</span>
+      <span class="lang-en">One machine.<br>Three Claude entry points, three countries.</span>
+    </h1>
+    <p class="hero-sub">
+      <span class="lang-zh">Claude Code、Claude 桌面端、浏览器里的 claude.ai —— 它们读的不是同一份代理配置，
+        所以出口 IP 和落地地区<strong>可以不一样</strong>，而它们都不会告诉你这件事。
+        这个工具把它量出来：每个入口的出口地址、落地国家、边缘机房、分段延迟、
+        遥测发往哪个地区，以及 Claude 的进程此刻实际连着谁。</span>
+      <span class="lang-en">Claude Code, the Claude desktop app and claude.ai in a browser do not read the same
+        proxy configuration — so their exit IPs and landing regions <strong>can differ</strong>, and none of
+        them tells you. This tool measures it: per-entry exit address, country, edge datacenter,
+        phase-by-phase latency, where the telemetry goes, and what Claude's processes are connected to
+        right now.</span>
+    </p>
+    <div class="hero-cta">
+      <a class="anth-button" href="demo.html">
+        <span class="lang-zh">看成品界面</span><span class="lang-en">See the dashboard</span>
+      </a>
+      <a class="anth-button anth-button--ghost" href="08-deploy.html">
+        <span class="lang-zh">五分钟跑起来</span><span class="lang-en">Run it in five minutes</span>
+      </a>
+    </div>
+    <p class="hero-note">
+      <span class="lang-zh">全部探测在本机发起 · 采样结果不上传到任何地方 · 界面只监听回环地址 · 监控默认关闭</span>
+      <span class="lang-en">All probing is local · samples are never uploaded · the UI binds loopback only · monitoring is off by default</span>
+    </p>
+  </div>
+</header>
+
+<!-- ═══════════════════════ 为什么会不一样 ═══════════════════════ -->
+<section class="anth-section anth-section--subtle">
+  <div class="anth-container anth-container--wide">
+    <div class="section-head">
+      <span class="anth-badge">
+        <span class="lang-zh">根源</span><span class="lang-en">Root cause</span>
+      </span>
+      <h2>
+        <span class="lang-zh">Node 默认不读系统代理</span>
+        <span class="lang-en">Node does not read the system proxy</span>
+      </h2>
+      <p class="lead">
+        <span class="lang-zh">你在系统设置里配好代理，桌面端立刻生效，而 Claude Code 完全不知道它存在。
+          再叠上分流器「按 IP 匹配」和「按域名匹配」是两套不同的过程 ——
+          同一个域名从 CLI 出去和从桌面端出去，命中的规则可以不同，落地国家也就不同。</span>
+        <span class="lang-en">You configure a proxy in System Settings; the desktop app picks it up immediately and
+          Claude Code never learns it exists. Add that a rule-based router matches <em>by IP</em> on one path
+          and <em>by domain</em> on the other, and the same hostname can land in two different countries
+          depending on which entry point sent it.</span>
+      </p>
+    </div>
+
+    <figure>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1140 400" width="1140" role="img"
+             aria-label="三个入口分别读不同的代理配置，因此可以从不同的出口出去">
+          <defs>
+            <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#8d8b80"/>
+            </marker>
+          </defs>
+
+          <!-- 列标题 -->
+          <text x="20"  y="26" font-family="Poppins, sans-serif" font-size="12.5" font-weight="700" fill="#A94F31" letter-spacing="1.4">入口 · ENTRY</text>
+          <text x="316" y="26" font-family="Poppins, sans-serif" font-size="12.5" font-weight="700" fill="#3E6E9E" letter-spacing="1.4">读什么配置 · CONFIG</text>
+          <text x="640" y="26" font-family="Poppins, sans-serif" font-size="12.5" font-weight="700" fill="#5d6b46" letter-spacing="1.4">分流器按什么匹配 · MATCH</text>
+          <text x="944" y="26" font-family="Poppins, sans-serif" font-size="12.5" font-weight="700" fill="#141413" letter-spacing="1.4">出口 · EXIT</text>
+
+          <!-- 第一行：Claude Code -->
+          <rect x="20" y="48" width="266" height="86" rx="12" fill="rgba(217,119,87,0.14)" stroke="#d97757"/>
+          <circle cx="48" cy="76" r="9" fill="#d97757"/>
+          <text x="68" y="81" font-family="Poppins, sans-serif" font-size="16" font-weight="600" fill="#141413">Claude Code</text>
+          <text x="40" y="106" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">CLI · Node 运行时</text>
+          <text x="40" y="124" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">单文件可执行</text>
+
+          <rect x="316" y="48" width="290" height="86" rx="12" fill="#ffffff" stroke="#e8e6dc"/>
+          <text x="336" y="76" font-family="JetBrains Mono, monospace" font-size="13" fill="#141413">HTTPS_PROXY / HTTP_PROXY</text>
+          <text x="336" y="98" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">只认这两个环境变量。</text>
+          <text x="336" y="118" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">没设 → 直连。</text>
+
+          <rect x="640" y="48" width="266" height="86" rx="12" fill="rgba(120,140,93,0.13)" stroke="#788c5d"/>
+          <text x="660" y="78" font-family="Poppins, sans-serif" font-size="14.5" font-weight="600" fill="#141413">按 IP 匹配规则</text>
+          <text x="660" y="100" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">直连时若有 TUN / 透明代理，</text>
+          <text x="660" y="118" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">规则拿到的只有目的 IP。</text>
+
+          <rect x="944" y="48" width="176" height="86" rx="12" fill="#141413"/>
+          <text x="966" y="82" font-family="Poppins, sans-serif" font-size="20" font-weight="600" fill="#faf9f5">新加坡</text>
+          <text x="966" y="106" font-family="JetBrains Mono, monospace" font-size="12" fill="#b0aea5">203.0.113.24</text>
+          <text x="966" y="124" font-family="JetBrains Mono, monospace" font-size="12" fill="#e5936f">colo SIN</text>
+
+          <!-- 第二行：桌面端 -->
+          <rect x="20" y="154" width="266" height="86" rx="12" fill="rgba(106,155,204,0.14)" stroke="#6a9bcc"/>
+          <circle cx="48" cy="182" r="9" fill="#6a9bcc"/>
+          <text x="68" y="187" font-family="Poppins, sans-serif" font-size="16" font-weight="600" fill="#141413">Claude 桌面端</text>
+          <text x="40" y="212" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">Electron / Chromium</text>
+          <text x="40" y="230" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">app.asar</text>
+
+          <rect x="316" y="154" width="290" height="86" rx="12" fill="#ffffff" stroke="#e8e6dc"/>
+          <text x="336" y="182" font-family="JetBrains Mono, monospace" font-size="13" fill="#141413">scutil --proxy</text>
+          <text x="336" y="204" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">读操作系统的代理设置，</text>
+          <text x="336" y="224" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">用 HTTP CONNECT 建隧道。</text>
+
+          <rect x="640" y="154" width="266" height="86" rx="12" fill="rgba(120,140,93,0.13)" stroke="#788c5d"/>
+          <text x="660" y="184" font-family="Poppins, sans-serif" font-size="14.5" font-weight="600" fill="#141413">按域名匹配规则</text>
+          <text x="660" y="206" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">CONNECT 把域名原样交给代理，</text>
+          <text x="660" y="224" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">规则看得到域名。</text>
+
+          <rect x="944" y="154" width="176" height="86" rx="12" fill="#141413"/>
+          <text x="966" y="188" font-family="Poppins, sans-serif" font-size="20" font-weight="600" fill="#faf9f5">日本</text>
+          <text x="966" y="212" font-family="JetBrains Mono, monospace" font-size="12" fill="#b0aea5">198.51.100.77</text>
+          <text x="966" y="230" font-family="JetBrains Mono, monospace" font-size="12" fill="#e5936f">colo NRT</text>
+
+          <!-- 第三行：浏览器 -->
+          <rect x="20" y="260" width="266" height="86" rx="12" fill="rgba(106,155,204,0.14)" stroke="#6a9bcc"/>
+          <circle cx="48" cy="288" r="9" fill="#6a9bcc"/>
+          <text x="68" y="293" font-family="Poppins, sans-serif" font-size="16" font-weight="600" fill="#141413">浏览器 claude.ai</text>
+          <text x="40" y="318" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">Safari / Chrome / Firefox</text>
+          <text x="40" y="336" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">可能装了代理插件</text>
+
+          <rect x="316" y="260" width="290" height="86" rx="12" fill="#ffffff" stroke="#e8e6dc"/>
+          <text x="336" y="288" font-family="Poppins, sans-serif" font-size="13.5" font-weight="600" fill="#141413">系统代理，除非插件接管</text>
+          <text x="336" y="310" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">插件可以单独改写这一条路，</text>
+          <text x="336" y="330" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">于是和桌面端又不一样。</text>
+
+          <rect x="640" y="260" width="266" height="86" rx="12" fill="rgba(120,140,93,0.13)" stroke="#788c5d"/>
+          <text x="660" y="290" font-family="Poppins, sans-serif" font-size="14.5" font-weight="600" fill="#141413">同上，但可被插件改写</text>
+          <text x="660" y="312" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">三个入口于是有三种可能，</text>
+          <text x="660" y="330" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">而没有任何界面显示它。</text>
+
+          <rect x="944" y="260" width="176" height="86" rx="12" fill="#141413"/>
+          <text x="966" y="294" font-family="Poppins, sans-serif" font-size="20" font-weight="600" fill="#faf9f5">日本</text>
+          <text x="966" y="318" font-family="JetBrains Mono, monospace" font-size="12" fill="#b0aea5">198.51.100.77</text>
+          <text x="966" y="336" font-family="JetBrains Mono, monospace" font-size="12" fill="#e5936f">colo NRT</text>
+
+          <!-- 连线 -->
+          <line x1="286" y1="91"  x2="310" y2="91"  stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="606" y1="91"  x2="634" y2="91"  stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="906" y1="91"  x2="938" y2="91"  stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="286" y1="197" x2="310" y2="197" stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="606" y1="197" x2="634" y2="197" stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="906" y1="197" x2="938" y2="197" stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="286" y1="303" x2="310" y2="303" stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="606" y1="303" x2="634" y2="303" stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+          <line x1="906" y1="303" x2="938" y2="303" stroke="#8d8b80" stroke-width="1.9" marker-end="url(#arw)"/>
+
+          <text x="20" y="378" font-family="Poppins, sans-serif" font-size="13" fill="#6b6a5f">
+            地址取自 RFC 5737 文档保留段，不是任何人的真实网络。
+          </text>
+        </svg>
+      </div>
+      <figcaption>
+        <span class="lang-zh">这三行是同一台机器上同时成立的三个事实。工具对每个入口造一条<strong>等价探测路径</strong> ——
+          用和该入口完全相同的代理配置去问目的地「你看到的我是谁」，所以得到的不是猜测，是目的地那侧的答案。
+          详见 <a href="03-routing.html">出口为什么不同</a>。</span>
+        <span class="lang-en">All three rows hold at the same time on one machine. The tool builds an
+          <strong>equivalent probe path</strong> per entry point — same proxy configuration, then asks the
+          destination who it sees. Not a guess: the destination's own answer. See
+          <a href="03-routing.html">why exits differ</a>.</span>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 它回答哪些问题 ═══════════════════════ -->
+<section class="anth-section">
+  <div class="anth-container anth-container--wide">
+    <div class="section-head">
+      <span class="anth-badge">
+        <span class="lang-zh">功能</span><span class="lang-en">What it answers</span>
+      </span>
+      <h2>
+        <span class="lang-zh">六个它能直接回答的问题</span>
+        <span class="lang-en">Six questions it answers directly</span>
+      </h2>
+    </div>
+
+    <div class="ref-grid">
+      <a class="ref-card" href="03-routing.html">
+        <span class="ref-card__num">01 · EXIT</span>
+        <span class="ref-card__name"><span class="lang-zh">我的流量从哪个 IP、哪个地区出去？</span><span class="lang-en">Which IP and region do I exit from?</span></span>
+        <span class="ref-card__desc"><span class="lang-zh">三个入口各一张卡：出口地址、落地国家、Cloudflare 边缘机房。国家相同但地址不同也会展开列出来 —— 那说明分流规则只覆盖了一半。</span><span class="lang-en">One card per entry point: exit address, country, Cloudflare edge datacenter. Same country with different addresses is expanded too — that means the routing rules only cover half of it.</span></span>
+        <span class="anth-link"><span class="lang-zh">读原理</span><span class="lang-en">Read how</span></span>
+      </a>
+      <a class="ref-card" href="02-telemetry.html">
+        <span class="ref-card__num">02 · TELEMETRY</span>
+        <span class="ref-card__name"><span class="lang-zh">遥测发到哪里，包里有什么字段？</span><span class="lang-en">Where does telemetry go, and what is in it?</span></span>
+        <span class="ref-card__desc"><span class="lang-zh">Datadog 的接入点在哪个地区、跑在哪家云上（用厂商官方 IP 段确证），以及从本机 Claude Code 里<strong>静态提取</strong>出的字段清单和事件名。</span><span class="lang-en">Which region the Datadog intake sits in, which cloud runs it (confirmed against vendor-published IP ranges), plus the field list and event names <strong>statically extracted</strong> from your own Claude Code install.</span></span>
+        <span class="anth-link"><span class="lang-zh">读原理</span><span class="lang-en">Read how</span></span>
+      </a>
+      <a class="ref-card" href="04-latency.html">
+        <span class="ref-card__num">03 · LATENCY</span>
+        <span class="ref-card__name"><span class="lang-zh">「Claude 很慢」到底慢在哪一段？</span><span class="lang-en">Where exactly is “Claude is slow”?</span></span>
+        <span class="ref-card__desc"><span class="lang-zh">DNS / TCP / TLS / 首字节四段分开量。四个原因四种修法：换解析器、换出口节点、查丢包、等服务端。给一个总数等于没说。</span><span class="lang-en">DNS, TCP, TLS and first byte measured separately. Four causes, four different fixes: change resolver, change exit node, chase packet loss, or wait on the server. A single total tells you none of them.</span></span>
+        <span class="anth-link"><span class="lang-zh">读原理</span><span class="lang-en">Read how</span></span>
+      </a>
+      <a class="ref-card" href="06-toolbox.html">
+        <span class="ref-card__num">04 · NATURE</span>
+        <span class="ref-card__name"><span class="lang-zh">出口是机房还是家宽？动态还是静态？</span><span class="lang-en">Datacenter or home broadband? Dynamic or static?</span></span>
+        <span class="ref-card__desc"><span class="lang-zh">厂商官方 IP 段 + ASN + rDNS 合起来判断，并且<strong>标出置信度</strong>。「动态还是静态」单次观测答不了，观测不足 6 小时就明说判断不了。</span><span class="lang-en">Vendor IP ranges, ASN and rDNS combined — and always <strong>labelled with a confidence level</strong>. “Dynamic or static” cannot be answered in one sample; under six hours of observation it says so instead of guessing.</span></span>
+        <span class="anth-link"><span class="lang-zh">读原理</span><span class="lang-en">Read how</span></span>
+      </a>
+      <a class="ref-card" href="01-endpoints.html">
+        <span class="ref-card__num">05 · SOCKETS</span>
+        <span class="ref-card__name"><span class="lang-zh">Claude 的进程此刻正连着谁？</span><span class="lang-en">What are Claude's processes connected to right now?</span></span>
+        <span class="ref-card__desc"><span class="lang-zh">实时连接表，每一行标出目的地是真实地址、fake-ip 占位、还是本机代理（那种情况下真实目的地看不见 —— 这一点会明说，不会假装看得见）。</span><span class="lang-en">A live socket table where every row says whether the destination is a real address, a fake-ip placeholder, or a local proxy — in which case the true destination is invisible, and the tool says so rather than pretending.</span></span>
+        <span class="anth-link"><span class="lang-zh">读原理</span><span class="lang-en">Read how</span></span>
+      </a>
+      <a class="ref-card" href="demo.html">
+        <span class="ref-card__num">06 · FIXES</span>
+        <span class="ref-card__name"><span class="lang-zh">出了问题，具体该改哪一行？</span><span class="lang-en">Something is wrong — which line do I change?</span></span>
+        <span class="ref-card__desc"><span class="lang-zh">诊断面板每条都带三样：<strong>判据</strong>（算出它的实测数字）、<strong>成因</strong>（不是现象的复述）、<strong>下一步</strong>（可以直接照做的命令或配置）。没有判据的建议不值得照做。</span><span class="lang-en">Every finding carries three things: the <strong>evidence</strong> that produced it, the <strong>cause</strong> (not a restatement of the symptom), and a <strong>next step</strong> you can actually run. A recommendation without evidence is not worth following.</span></span>
+        <span class="anth-link"><span class="lang-zh">看成品界面</span><span class="lang-en">See the dashboard</span></span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 界面 ═══════════════════════ -->
+<section class="anth-section anth-section--subtle">
+  <div class="anth-container anth-container--wide">
+    <div class="section-head">
+      <span class="anth-badge">
+        <span class="lang-zh">界面</span><span class="lang-en">The dashboard</span>
+      </span>
+      <h2>
+        <span class="lang-zh">一个本机网页，监控默认是关的</span>
+        <span class="lang-en">A local web page, with monitoring off by default</span>
+      </h2>
+      <p class="lead">
+        <span class="lang-zh">一个专门监控网络流量的工具，不该在你没同意之前就开始发请求。所以开关在页面右上角，
+          默认关闭，采样间隔可选 10 秒 / 30 秒 / 5 分钟。所有面板在没数据时显示的是「还没采样」，
+          而不是编一个 0 出来。</span>
+        <span class="lang-en">A tool whose whole job is watching network traffic should not send requests before you
+          say so. The switch sits in the top bar, off by default, with a 10s / 30s / 5m interval. Every panel
+          shows “nothing sampled yet” instead of inventing a zero.</span>
+      </p>
+    </div>
+
+    <div class="two-col">
+      <figure style="margin:0;">
+        <a class="shot" href="demo.html">
+          <img src="img/overview.jpg" alt="总览面板：三个入口各一张卡，一张暗卡放本轮结论，右侧是遥测目的地的可达性与延迟" width="973" height="1200">
+          <span class="shot__cap">
+            <span class="lang-zh"><strong>总览</strong> —— 三个入口各一张卡，暗卡放算出来的结论，右边是遥测目的地。点开可交互的 demo。</span>
+            <span class="lang-en"><strong>Overview</strong> — one card per entry point, the dark card holds the computed findings, telemetry destinations on the right. Click for the interactive demo.</span>
+          </span>
+        </a>
+      </figure>
+      <figure style="margin:0;">
+        <a class="shot" href="demo.html">
+          <img src="img/history.jpg" alt="历史看板：按天归档的汇总，可以选看哪几天、也可以删掉哪几天" width="1082" height="1200">
+          <span class="shot__cap">
+            <span class="lang-zh"><strong>历史看板</strong> —— 长期开着监控之后，按天归档的汇总。可以选看哪几天，也可以删掉哪几天省空间。</span>
+            <span class="lang-en"><strong>History</strong> — daily rollups once monitoring has been on for a while. Pick which days to view, delete the ones you no longer need.</span>
+          </span>
+        </a>
+      </figure>
+    </div>
+
+    <div class="stat-row" style="margin-top:var(--space-7);">
+      <div class="stat-cell">
+        <span class="stat-cell__num">9</span>
+        <span class="stat-cell__label"><span class="lang-zh">个面板：总览 / 逐域名 / 实时连接 / 延迟 / 路径质量 / 诊断 / 历史 / 解析对账 / 遥测字段</span><span class="lang-en">panels: overview, by-domain, live sockets, latency, path quality, findings, history, DNS truth, telemetry fields</span></span>
+      </div>
+      <div class="stat-cell">
+        <span class="stat-cell__num">0</span>
+        <span class="stat-cell__label"><span class="lang-zh">个第三方 Python 包 —— 只用标准库，clone 完就能跑</span><span class="lang-en">third-party Python packages — stdlib only, runs straight after clone</span></span>
+      </div>
+      <div class="stat-cell">
+        <span class="stat-cell__num">4</span>
+        <span class="stat-cell__label"><span class="lang-zh">档置信度：确证 / 较可能 / 推测 / 判不出。判不出就写判不出</span><span class="lang-en">confidence levels: confirmed, likely, inferred, unknown. Unknown is written as unknown</span></span>
+      </div>
+      <div class="stat-cell">
+        <span class="stat-cell__num">~20k</span>
+        <span class="stat-cell__label"><span class="lang-zh">条厂商官方 IP 前缀，用来确证「这是不是机房」</span><span class="lang-en">vendor-published IP prefixes, used to confirm “is this a datacenter”</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 快速开始 ═══════════════════════ -->
+<section class="anth-section">
+  <div class="anth-container anth-container--wide">
+    <div class="section-head">
+      <span class="anth-badge">
+        <span class="lang-zh">快速开始</span><span class="lang-en">Quick start</span>
+      </span>
+      <h2>
+        <span class="lang-zh">不装包、不要 root、不改系统配置</span>
+        <span class="lang-en">No packages, no root, no system changes</span>
+      </h2>
+    </div>
+
+    <div class="quickstart">
+      <div>
+        <h3 style="font-family:var(--font-heading); font-size:21px; font-weight:600; margin:0 0 var(--space-3);">
+          <span class="lang-zh">Python 3.9+，macOS</span>
+          <span class="lang-en">Python 3.9+, macOS</span>
+        </h3>
+        <p style="font-size:15px; line-height:1.72; color:var(--anth-text-secondary); margin:0 0 var(--space-4);">
+          <span class="lang-zh"><code>doctor</code> 不联网，只读本机配置，先让你看清有哪几条路径。
+            确认无误再跑 <code>probe</code> 发第一轮探测。界面起来之后监控还是关的，
+            要自己在页面上打开。</span>
+          <span class="lang-en"><code>doctor</code> sends nothing — it only reads local configuration so you can see
+            which paths exist. Then <code>probe</code> fires the first round. Even with the UI up,
+            monitoring stays off until you turn it on.</span>
+        </p>
+        <a class="anth-link" href="08-deploy.html">
+          <span class="lang-zh">完整的安装与长期运行说明</span>
+          <span class="lang-en">Full install and long-running setup</span>
+        </a>
+      </div>
+      <pre><code><span class="com"># 拿下来</span>
+<span class="cmd">git clone</span> https://github.com/TbusOS/claude-egress-monitor.git
+<span class="cmd">cd</span> claude-egress-monitor
+
+<span class="com"># 1. 看清本机三个入口各走哪条路（不发任何探测）</span>
+<span class="cmd">python3</span> -m cem doctor
+
+<span class="com"># 2. 立刻采一轮，打印在终端</span>
+<span class="cmd">python3</span> -m cem probe
+
+<span class="com"># 3. 起界面（监控默认关闭，在页面上按开关启动）</span>
+<span class="cmd">python3</span> -m cem serve --open
+
+<span class="com"># 只想看界面长什么样、不联网：</span>
+<span class="cmd">python3</span> -m cem serve --demo --open</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 章节 ═══════════════════════ -->
+<section class="anth-section anth-section--subtle">
+  <div class="anth-container anth-container--wide">
+    <div class="section-head">
+      <span class="anth-badge">
+        <span class="lang-zh">文档</span><span class="lang-en">Documentation</span>
+      </span>
+      <h2>
+        <span class="lang-zh">八章，从取证方法到部署</span>
+        <span class="lang-en">Eight chapters, from evidence to deployment</span>
+      </h2>
+      <p class="lead">
+        <span class="lang-zh">每一章都给出<strong>可以自己跑一遍的复现命令</strong>，不要求你相信这里写的任何一句话。
+          <span style="color:var(--anth-orange-ink);">章节正文目前只有中文，欢迎提 PR 翻译。</span></span>
+        <span class="lang-en">Every chapter ships <strong>commands you can run yourself</strong> — you are not asked to
+          take any of this on faith.
+          <span style="color:var(--anth-orange-ink);">The chapters are currently Chinese only; translation PRs are very welcome.</span></span>
+      </p>
+    </div>
+
+    <div class="ref-grid">
+      <a class="ref-card" href="01-endpoints.html">
+        <span class="ref-card__num">01</span>
+        <span class="ref-card__name">出网域名</span>
+        <span class="ref-card__desc">Claude 三端会连哪些域名，每一行的取证来源是什么，以及怎么自己抽一遍字符串对账。</span>
+      </a>
+      <a class="ref-card" href="02-telemetry.html">
+        <span class="ref-card__num">02</span>
+        <span class="ref-card__name">遥测</span>
+        <span class="ref-card__desc">Datadog 是什么、发去哪个地区、包里有哪些字段，以及静态提取能答什么、答不了什么。</span>
+      </a>
+      <a class="ref-card" href="03-routing.html">
+        <span class="ref-card__num">03</span>
+        <span class="ref-card__name">出口为什么不同</span>
+        <span class="ref-card__desc">整个工具存在的理由。三个入口读不同配置、fake-ip、split-DNS 三个坑，以及受限地区。</span>
+      </a>
+      <a class="ref-card" href="04-latency.html">
+        <span class="ref-card__num">04</span>
+        <span class="ref-card__name">延迟</span>
+        <span class="ref-card__desc">四段分别代表什么，p50 和 p95 怎么读，以及为什么不能拿探测延迟当模型响应时间。</span>
+      </a>
+      <a class="ref-card" href="05-privacy.html">
+        <span class="ref-card__num">05</span>
+        <span class="ref-card__name">隐私边界</span>
+        <span class="ref-card__desc">这个工具收集什么、不收集什么、什么绝不做（不解密 TLS、不装 CA、不上传）。</span>
+      </a>
+      <a class="ref-card" href="06-toolbox.html">
+        <span class="ref-card__num">06</span>
+        <span class="ref-card__name">工具箱</span>
+        <span class="ref-card__desc">手动复现的命令合集，加上每种判断各自的把握程度和它答不了的边界。</span>
+      </a>
+      <a class="ref-card" href="07-datasources.html">
+        <span class="ref-card__num">07</span>
+        <span class="ref-card__name">数据源</span>
+        <span class="ref-card__desc">每个结论从哪来：地址、给什么、更新频率、缓存多久、什么许可、撑到哪一档置信度。</span>
+      </a>
+      <a class="ref-card" href="08-deploy.html">
+        <span class="ref-card__num">08</span>
+        <span class="ref-card__name">安装部署</span>
+        <span class="ref-card__desc">依赖、命令、界面参数、launchd 长期运行、数据存哪怎么删、怎么卸载干净。</span>
+      </a>
+      <a class="ref-card" href="architecture.html">
+        <span class="ref-card__num">+</span>
+        <span class="ref-card__name">架构与设计</span>
+        <span class="ref-card__desc">模块分层、一轮采样的数据流、以及七条决定了这个工具长成什么样的设计取舍。</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 参与维护 ═══════════════════════ -->
+<section class="anth-section">
+  <div class="anth-container anth-container--wide">
+    <div class="two-col">
+      <div>
+        <span class="anth-badge">
+          <span class="lang-zh">参与维护</span><span class="lang-en">Contributing</span>
+        </span>
+        <h2 style="font-family:var(--font-heading); font-size:31px; font-weight:600; letter-spacing:-0.02em; margin:var(--space-3) 0 var(--space-4);">
+          <span class="lang-zh">四条硬规矩</span>
+          <span class="lang-en">Four hard rules</span>
+        </h2>
+        <p class="lead" style="margin-bottom:var(--space-5);">
+          <span class="lang-zh">这四条不是风格偏好，是这个工具能不能被信任的前提。完整的模块地图、
+            怎么加域名 / 加数据源 / 加诊断规则，都在 CONTRIBUTING 里。</span>
+          <span class="lang-en">These are not style preferences — they are the conditions under which this tool can be
+            trusted at all. The full module map and how to add a domain, a data source or a diagnostic rule
+            live in CONTRIBUTING.</span>
+        </p>
+        <div class="hero-cta">
+          <a class="anth-button" href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">
+            <span class="lang-zh">读 CONTRIBUTING</span><span class="lang-en">Read CONTRIBUTING</span>
+          </a>
+          <a class="anth-button anth-button--ghost" href="architecture.html">
+            <span class="lang-zh">看架构</span><span class="lang-en">See the architecture</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="rule-list">
+        <div>
+          <span class="rule__title">
+            <span class="lang-zh">1 · 仓库里不能有任何人的本机网络信息</span>
+            <span class="lang-en">1 · No one's local network details in the repo</span>
+          </span>
+          <p class="rule__body">
+            <span class="lang-zh">出口 IP、代理端口、内网地址、运营商名、城市 —— 包括测试样本和代码注释里。
+              演示数据一律用 RFC 5737 文档保留段。</span>
+            <span class="lang-en">Exit IPs, proxy ports, private addresses, ISP names, cities — including inside test
+              fixtures and code comments. Demo data always uses RFC 5737 documentation ranges.</span>
+          </p>
+        </div>
+        <div>
+          <span class="rule__title">
+            <span class="lang-zh">2 · 不确定的结论必须标成推测</span>
+            <span class="lang-en">2 · Inferences must be labelled as inferences</span>
+          </span>
+          <p class="rule__body">
+            <span class="lang-zh">四档置信度。判不出就写判不出 —— 尤其当猜错的方向不对称时，
+              把机房 IP 猜成家宽会让人以为风险更低。</span>
+            <span class="lang-en">Four levels. Unknown is written as unknown — especially where being wrong is
+              asymmetric: calling a datacenter IP “home broadband” makes the risk look smaller than it is.</span>
+          </p>
+        </div>
+        <div>
+          <span class="rule__title">
+            <span class="lang-zh">3 · 界面不发明数字</span>
+            <span class="lang-en">3 · The UI never invents a number</span>
+          </span>
+          <p class="rule__body">
+            <span class="lang-zh">没有的值渲染成破折号，绝不用 0 或上一轮的值顶上。
+              一个假的 0 会被读成「延迟 0 毫秒」。</span>
+            <span class="lang-en">A missing value renders as a dash, never as 0 or last round's figure.
+              A fake zero reads as “0 ms latency”.</span>
+          </p>
+        </div>
+        <div>
+          <span class="rule__title">
+            <span class="lang-zh">4 · 结论只算 Claude 的域名</span>
+            <span class="lang-en">4 · Conclusions cover Claude's domains only</span>
+          </span>
+          <p class="rule__body">
+            <span class="lang-zh">对照组域名混进结论会产生假警报，引导人去改一份没问题的配置。
+              假警报比漏报更消耗信任。</span>
+            <span class="lang-en">Letting a control-group domain into the conclusions produces false alarms that send
+              people to edit a configuration that was fine. False alarms cost more trust than misses.</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="anth-footer">
+  <div class="anth-footer-grid">
+    <div class="anth-footer-group">
+      <h5><span class="lang-zh">原理</span><span class="lang-en">How it works</span></h5>
+      <a href="01-endpoints.html"><span class="lang-zh">出网域名</span><span class="lang-en">Endpoints</span></a>
+      <a href="02-telemetry.html"><span class="lang-zh">遥测</span><span class="lang-en">Telemetry</span></a>
+      <a href="03-routing.html"><span class="lang-zh">出口为什么不同</span><span class="lang-en">Why exits differ</span></a>
+      <a href="04-latency.html"><span class="lang-zh">延迟</span><span class="lang-en">Latency</span></a>
+    </div>
+    <div class="anth-footer-group">
+      <h5><span class="lang-zh">动手</span><span class="lang-en">Hands on</span></h5>
+      <a href="05-privacy.html"><span class="lang-zh">隐私边界</span><span class="lang-en">Privacy line</span></a>
+      <a href="06-toolbox.html"><span class="lang-zh">工具箱</span><span class="lang-en">Toolbox</span></a>
+      <a href="07-datasources.html"><span class="lang-zh">数据源</span><span class="lang-en">Data sources</span></a>
+      <a href="08-deploy.html"><span class="lang-zh">安装部署</span><span class="lang-en">Deploy</span></a>
+    </div>
+    <div class="anth-footer-group">
+      <h5><span class="lang-zh">仓库</span><span class="lang-en">Repository</span></h5>
+      <a href="https://github.com/TbusOS/claude-egress-monitor" target="_blank" rel="noopener"><span class="lang-zh">源码</span><span class="lang-en">Source</span></a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener"><span class="lang-zh">参与维护</span><span class="lang-en">Contributing</span></a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/TbusOS/claude-egress-monitor/blob/main/LICENSE" target="_blank" rel="noopener"><span class="lang-zh">MIT 许可</span><span class="lang-en">MIT licence</span></a>
+    </div>
+    <div class="anth-footer-group">
+      <h5><span class="lang-zh">看一眼</span><span class="lang-en">Take a look</span></h5>
+      <a href="demo.html"><span class="lang-zh">成品界面</span><span class="lang-en">The dashboard</span></a>
+      <a href="architecture.html"><span class="lang-zh">架构与设计</span><span class="lang-en">Architecture</span></a>
+      <a href="index.html"><span class="lang-zh">首页</span><span class="lang-en">Home</span></a>
+    </div>
+  </div>
+  <div class="anth-footer-legal">
+    <span class="lang-zh">全部探测在本机发起 · 采样结果不上传 · 界面只监听回环地址 ·
+      文档与截图中的地址取自 RFC 5737 文档保留段，不是任何人的真实网络</span>
+    <span class="lang-en">All probing is local · samples are never uploaded · the UI binds loopback only ·
+      addresses in the docs and screenshots come from the RFC 5737 documentation ranges</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var html = document.documentElement;
+  var saved;
+  try { saved = localStorage.getItem('cem-lang'); } catch (e) {}
+  if (!saved) {
+    saved = (navigator.language || 'en').toLowerCase().indexOf('zh') === 0 ? 'zh' : 'en';
+  }
+  function apply(lang) {
+    html.setAttribute('data-lang', lang);
+    html.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en');
+    try { localStorage.setItem('cem-lang', lang); } catch (e) {}
+    Array.prototype.forEach.call(document.querySelectorAll('.lang-toggle'), function (btn) {
+      btn.textContent = lang === 'zh' ? 'EN / 中' : '中 / EN';
+    });
+  }
+  apply(saved);
+  document.addEventListener('click', function (evt) {
+    var t = evt.target;
+    while (t && t !== document.body) {
+      if (t.classList && t.classList.contains('lang-toggle')) {
+        apply(html.getAttribute('data-lang') === 'zh' ? 'en' : 'zh');
+        return;
+      }
+      t = t.parentNode;
+    }
+  });
+})();
+</script>
+
+<!-- design-review:self-diff v1
+Skill: anthropic
+Page-type: docs-home
+Created: 2026-08-15
+
+Decisions (7):
+1. [root-cause-diagram-is-the-hero-content] chose "a four-column diagram showing entry → config read → match basis → exit, with three concrete rows" over "a tagline plus feature grid". Because: the entire reason this tool exists is a fact most readers do not believe until they see it laid out — that one machine has three different answers. A tagline asks for trust; the diagram lets them check the claim against their own setup.
+2. [exit-column-is-the-one-dark-element] chose "the exit cards are near-black while every other node is a light tint" over "uniform card treatment across all four columns". Because: the exit address is the answer the whole diagram is built to deliver, and on a cream page the dark block is where the eye lands. Two Japan cards and one Singapore card then read as a difference without needing a legend.
+3. [six-questions-not-six-features] chose "cards titled as questions the reader already has" over "cards titled with feature names". Because: someone landing here is trying to work out whether this tool answers a question they are already stuck on. "Which IP and region do I exit from?" matches their search; "Egress surface analysis" does not.
+4. [bilingual-front-door-monolingual-chapters] chose "index is bilingual, chapters stay Chinese, and the page says so in orange" over "translate everything" or "Chinese-only throughout". Because: machine-translating 5000 words of careful technical prose would produce text that is worse than honest scope. Naming the gap turns it into an invitation to contribute rather than a wall someone hits on the second click.
+5. [screenshots-link-to-the-live-demo] chose "both screenshots are links into demo.html" over "a lightbox or a separate gallery". Because: the demo is the real dashboard running on baked-in fictional data, so a reader who wants a closer look should get the clickable thing, not a bigger picture of it.
+6. [four-rules-on-the-front-page] chose "the four contribution rules appear in full on the home page" over "a link to CONTRIBUTING". Because: the rules are the argument for trusting the tool, not just internal process. A reader deciding whether to run this on their own machine wants to know the repo refuses to hold their exit IP before they clone.
+7. [stat-row-carries-limits-not-just-size] chose "one of the four stats is '4 confidence levels, unknown is written as unknown'" over "four size/scale numbers". Because: a monitoring tool's credibility rests on what it refuses to claim; making that a headline number puts the limit at the same visual weight as the capability.
+
+Known trade-offs:
+- Fonts load from Google Fonts. On a site whose subject is outbound traffic that is worth naming: it is one request to a third party, and the page renders correctly on the fallback stack if it is blocked.
+- The diagram's addresses are fictional (RFC 5737), which is stated inside the SVG itself rather than only in the caption — a reader who screenshots the diagram carries the disclaimer with it.
+- Chapter pages are generated from Markdown by scripts/build_docs.py and therefore do not carry the bilingual toggle; only this page and the architecture page are hand-written.
+/design-review:self-diff -->
+
+</body>
+</html>
