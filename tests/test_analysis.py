@@ -96,10 +96,10 @@ class TestEgressBySurface(unittest.TestCase):
 class TestConnectionBuilding(unittest.TestCase):
     def rows(self):
         return (
-            {"pid": 1, "command": "2.1.x", "surface": "cli",
+            {"pid": 1, "command": "0.0.0-demo", "surface": "cli",
              "local": "198.18.0.1:1", "remote_ip": "198.18.0.140",
              "remote_port": 443},
-            {"pid": 1, "command": "2.1.x", "surface": "cli",
+            {"pid": 1, "command": "0.0.0-demo", "surface": "cli",
              "local": "192.0.2.9:2", "remote_ip": "8.8.8.8",
              "remote_port": 443},
         )
@@ -267,7 +267,7 @@ class TestViewShaping(unittest.TestCase):
 
     def test_connection_rows_merge_by_destination(self):
         conns = tuple(
-            Connection(pid=1, command="2.1.x", surface="cli",
+            Connection(pid=1, command="0.0.0-demo", surface="cli",
                        local=f"192.0.2.9:{i}", remote_ip="192.0.2.40",
                        remote_port=443, kind="real", host="api.anthropic.com")
             for i in range(5)

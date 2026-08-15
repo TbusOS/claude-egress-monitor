@@ -18,7 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-CLI_VERSION_SAMPLED = "2.1.x"
+# 这份清单是从哪个版本抽出来的。写到小版本号就够读者判断新旧了，
+# 不写精确到 build 的号 —— 那是"抽取这份清单的那台机器装的是哪一版"，
+# 属于本机事实，而清单的新旧只需要这个粒度。
+CLI_VERSION_SAMPLED = "2.1.x（2026-08）"
 DESKTOP_SAMPLED = "/Applications/Claude.app (2026-08-14)"
 
 # 类别。UI 上按这个上色分组，docs 里按这个分节。

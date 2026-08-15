@@ -232,8 +232,8 @@ class TestAsnParsing(unittest.TestCase):
 
 class TestLsofParsing(unittest.TestCase):
     LSOF = """COMMAND     PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
-2.1.x   14708  demo    7u  IPv4 0x0000000000000000      0t0  TCP 198.18.0.1:51851->198.18.0.140:443 (ESTABLISHED)
-2.1.x   14708  demo   17u  IPv4 0x0000000000000000      0t0  TCP 192.0.2.9:50514->192.0.2.40:443 (ESTABLISHED)
+0.0.0-demo   14708  demo    7u  IPv4 0x0000000000000000      0t0  TCP 198.18.0.1:51851->198.18.0.140:443 (ESTABLISHED)
+0.0.0-demo   14708  demo   17u  IPv4 0x0000000000000000      0t0  TCP 192.0.2.9:50514->192.0.2.40:443 (ESTABLISHED)
 Claude     2002  demo   13u  IPv4 0x0000000000000000      0t0  TCP 127.0.0.1:52044->127.0.0.1:7890 (ESTABLISHED)
 identitys   663  demo   44u  IPv6 0x0000000000000000      0t0  TCP [fe80::1]:1024->[fe80::2]:1024 (ESTABLISHED)
 """
@@ -276,7 +276,7 @@ identitys   663  demo   44u  IPv6 0x0000000000000000      0t0  TCP [fe80::1]:102
 
 
 class TestProcessMatching(unittest.TestCase):
-    PS = """  501 /Users/x/.local/share/claude/versions/2.1.x --resume abc
+    PS = """  501 /Users/x/.local/share/claude/versions/0.0.0-demo --resume abc
   502 /Applications/Claude.app/Contents/MacOS/Claude
   503 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
   504 /usr/bin/python3 -m cem serve
@@ -313,7 +313,7 @@ class TestClashParsing(unittest.TestCase):
       {"id":"a","upload":10,"download":20,
        "metadata":{"host":"api.anthropic.com","destinationIP":"192.0.2.40",
                    "destinationPort":"443","network":"tcp",
-                   "processPath":"/Users/x/.local/share/claude/versions/2.1.x"},
+                   "processPath":"/Users/x/.local/share/claude/versions/0.0.0-demo"},
        "rule":"DomainSuffix","rulePayload":"anthropic.com",
        "chains":["JP-Tokyo","Proxy"]},
       {"id":"b","metadata":{"host":"example.com"},"chains":[]}
