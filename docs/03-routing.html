@@ -58,6 +58,19 @@ python3 -m cem probe      # 再量每条路径的出口</code></pre>
 <p><code>198.18.0.0/15</code> 是 RFC 2544 给网络设备基准测试保留的段，公网不可路由 —— 所以拿来做占位很安全，也正因如此，它出现在你的连接表里一定是本地分流器造成的。</p>
 <p><strong>这个坑反过来有一个好处</strong>：分流器给<strong>每个域名</strong>分配独立的占位地址， 所以可以反查 —— 看到 <code>198.18.0.140</code> 就能推出它是哪个域名。 在正常环境里做不到这件事（多个域名共用一个 CDN IP）。 本仓的 <code>cem/resolve.py</code> 就是用这个办法给连接表补上域名。</p>
 <p>要拿到真实解析，得走 <strong>DoH</strong>：报文是端到端加密的，中间的分流器改不了里面的答案。</p>
+<h3 id="fake-ip-会不会让出口-ip也测不准">fake-ip 会不会让「出口 IP」也测不准？</h3>
+<p><strong>不会。</strong> 这是这一节最容易读岔的一句，值得单独说清楚。</p>
+<div class="table-wrap"><table class="anth-table">
+<thead><tr><th>这个工具的测量项</th><th>怎么拿到的</th><th>fake-ip 有影响吗</th></tr></thead>
+<tbody>
+<tr><td>出口 IP / 落地国家 / 边缘机房</td><td>对域名建一条真的 HTTPS 连接，问目的地 <code>cdn-cgi/trace</code></td><td><strong>没有</strong></td></tr>
+<tr><td>DNS / TCP / TLS / 首字节 四段延迟</td><td>同一条连接上分段计时</td><td><strong>没有</strong></td></tr>
+<tr><td>逐跳延迟与丢包（路径质量）</td><td>往一个具体 IP 发 ICMP 探测包</td><td><strong>有，而且是致命的</strong></td></tr>
+</tbody></table></div>
+<p>区别在于<strong>问的对象不同</strong>：</p>
+<ul><li>前两项是<strong>问目的地</strong>。占位地址只是本机内部的一个标签，程序连上去之后 分流器照样把这条连接转发出去，Cloudflare 那侧看到的就是你真实的出口地址， 它把这个值原样告诉你。这条问答走的是真实链路，fake-ip 拦不住。</li><li>路径质量是<strong>往一个 IP 号码上打包</strong>。而这个号码是假的、公网上不存在， 包发出去就被本机分流器接住了 —— 得到的是&quot;到本机分流器&quot;的一跳， 不是&quot;到 Claude&quot;的路径。</li></ul>
+<p>所以在一台全程 fake-ip 的机器上，界面表现是：出口 IP、地区、colo、四段延迟 全部正常显示，只有「路径质量」那一屏说&quot;测不了&quot;，并给出三种绕开的办法。 <strong>这不是工具瞎了，是那一项的测量前提被破坏了，而它选择说出来而不是给个假数字。</strong></p>
+<p>顺带一提，这也解释了为什么本工具不靠 <code>dig</code> 判断出口： <code>dig</code> 拿到的是本机解析结果（可能是占位地址），而&quot;目的地看到的是谁&quot;只能问目的地。</p>
 <pre><code class="language-bash">curl -s -H &#x27;accept: application/dns-json&#x27; \
   &#x27;https://cloudflare-dns.com/dns-query?name=api.anthropic.com&amp;type=A&#x27;</code></pre>
 <p>界面上的「解析对账」面板就是把这两个结果并排放，不一致就标出来。</p>

@@ -1638,13 +1638,17 @@
         biSpan('本机开着 TUN + fake-ip，这些域名根本不解析到真实地址 —— ' +
                '路径探测量不到「到 Claude 的路」，只能量到本地分流器，' +
                '所以这里直接不测（测出来会是一跳、零点几毫秒的假结果）。' +
-               '点开任意一条看三种解法。业务流量本身不受影响，' +
-               '「延迟分解」里的 TCP / TLS 仍然是真实的。',
+               '受影响的只有这一屏：「总览」里的出口 IP、落地地区、边缘机房，' +
+               '以及「延迟分解」里的四段，全都照常准 —— 那几项是问目的地' +
+               '「你看到的我是谁」拿到的，fake-ip 拦不住那条问答。' +
+               '点开任意一条看三种解法。',
                'This machine runs TUN with fake-ip, so those hostnames never resolve to a real ' +
                'address and a path probe can only reach the local router — which is why they are ' +
                'not traced at all (the result would be a fake one-hop, sub-millisecond figure). ' +
-               'Open any row for the three ways round it. Traffic itself is unaffected: TCP/TLS ' +
-               'under Latency are still real measurements.')
+               'Only this screen is affected: the exit IP, region and edge datacenter on Overview, ' +
+               'and the four phases under Latency, are all still accurate — those come from asking ' +
+               'the destination who it sees, and fake-ip cannot intercept that exchange. ' +
+               'Open any row for the three ways round it.')
       ]));
     }
 
