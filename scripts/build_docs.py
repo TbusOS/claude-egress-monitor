@@ -69,11 +69,22 @@ IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
 
 
+SOURCE_BASE = f"{REPO_URL}/blob/main/"
+
+
 def rewrite_href(href: str) -> str:
-    """站内 .md 链接改写成 .html。外链和锚点原样保留。"""
+    """站内 .md 链接改写成 .html；跳出 docs/ 的链接改写成 GitHub 源码地址。
+
+    第二条是必须的：GitHub Pages **只发布 docs/ 目录**，所以文档里
+    `[cem/net.py](../cem/net.py)` 这种链接在站点上是 404。而在 GitHub 的
+    仓库浏览器里读 .md 源文件时它又是对的 —— 两边都要通，就只能在生成
+    HTML 的时候把它换成绝对的源码地址。
+    """
     if href.startswith(("http://", "https://", "#", "mailto:")):
         return href
     base, _, frag = href.partition("#")
+    if base.startswith("../"):
+        return SOURCE_BASE + base[3:] + (("#" + frag) if frag else "")
     if base.endswith(".md"):
         base = base[:-3] + ".html"
     return base + (("#" + frag) if frag else "")

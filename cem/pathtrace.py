@@ -27,6 +27,7 @@ import json
 import shutil
 import socket
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -202,17 +203,25 @@ def parse_mtr_json(payload: str) -> tuple[Hop, ...]:
     return tuple(out)
 
 
-def resolve_once(target: str) -> Optional[str]:
+def resolve_once(target: str, timeout: float = 4.0) -> Optional[str]:
     """target 解析到哪个地址。失败返回 None —— 这一项是加分信息，不能拖垮探测。
 
     单独解析一次而不是从 mtr 输出里读，是因为终点不回包时 mtr 根本不会
     打印目标地址，而"打向的是不是一个 fake-ip 占位地址"恰恰是那种情况下
     最需要知道的一件事。
+
+    **必须带超时。** DNS 卡住时 `getaddrinfo` 会一直等下去，而这个函数
+    在一遍探测开始前要对每个目标各调一次 —— 一个卡住的解析会让整遍
+    停在"正在解析目标"，界面上读作"卡死了"。
     """
+    old = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
     try:
         infos = socket.getaddrinfo(target, None, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, OSError, UnicodeError):
         return None
+    finally:
+        socket.setdefaulttimeout(old)
     for info in infos:
         addr = info[4][0]
         if addr:
@@ -236,11 +245,52 @@ FAKE_IP_REFUSAL = (
 )
 
 
-def trace(target: str, *, cycles: int = 5, timeout: float = 40.0) -> PathReport:
+class _Cancelled(Exception):
+    """探测被叫停。内部信号，不外泄。"""
+
+
+def _run_cancellable(args: list, *, timeout: float,
+                     cancel=None) -> subprocess.CompletedProcess:
+    """跑一个子进程，中途可以叫停。
+
+    为什么不用 `subprocess.run`：它会一直阻塞到进程结束。一次 mtr 要
+    五到十几秒，一遍七个目标就是一两分钟 —— 按下"停止"之后还要等当前
+    这一个跑完，界面上读作"停不下来"。所以改成 Popen + 轮询，
+    收到取消信号就 terminate。
+
+    没给 cancel 时行为和 `subprocess.run(timeout=…)` 完全一样。
+    """
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.25)
+            return subprocess.CompletedProcess(args, proc.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            pass
+        if cancel is not None and cancel.is_set():
+            proc.terminate()
+            try:
+                proc.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+            raise _Cancelled()
+        if time.monotonic() >= deadline:
+            proc.kill()
+            proc.communicate()
+            raise subprocess.TimeoutExpired(args, timeout)
+
+
+def trace(target: str, *, cycles: int = 5, timeout: float = 40.0,
+          cancel=None) -> PathReport:
     """跑一次 mtr。
 
     cycles 默认只有 5 —— 这是一个监控工具的后台任务，不是诊断会话。
     要更准的丢包率，使用者应该手动跑 `mtr -c 100`，那是另一种场合。
+
+    `cancel` 是一个 `threading.Event`，置位时立刻掐掉正在跑的 mtr。
     """
     binary = which()
     if not binary:
@@ -253,10 +303,12 @@ def trace(target: str, *, cycles: int = 5, timeout: float = 40.0) -> PathReport:
     # -n 不做反向解析（快很多，而且我们自己有 rDNS 查询）
     args = [binary, "--json", "-n", "-c", str(cycles), "--", target]
     try:
-        proc = subprocess.run(args, capture_output=True, text=True,
-                              timeout=timeout)
+        proc = _run_cancellable(args, timeout=timeout, cancel=cancel)
     except subprocess.TimeoutExpired:
         return PathReport(target=target, ok=False, error="mtr 超时", resolved=resolved)
+    except _Cancelled:
+        return PathReport(target=target, ok=False, resolved=resolved,
+                          error="被中途停掉了")
     except (OSError, subprocess.SubprocessError) as exc:
         return PathReport(target=target, ok=False, resolved=resolved,
                           error=f"{type(exc).__name__}: {exc}")

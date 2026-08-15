@@ -233,9 +233,26 @@ def inspect(binary: Optional[Path] = None) -> TelemetryReport:
     )
 
 
+def redact_home(path: Optional[str]) -> Optional[str]:
+    """把家目录换成 `~`。
+
+    Claude Code 装在 `/Users/<用户名>/.local/share/claude/versions/…`，
+    这个路径**带着用户名**。界面上没渲染它，但接口返回了 —— 而这个接口的
+    输出正是人们会贴进 issue 里求助的东西。贴一次就把用户名公开了。
+
+    纯字符串替换，不碰文件系统。
+    """
+    if not path:
+        return path
+    home = str(Path.home())
+    if home and path.startswith(home):
+        return "~" + path[len(home):]
+    return path
+
+
 def to_json(report: TelemetryReport) -> dict:
     return {
-        "binary": report.binary, "version": report.version,
+        "binary": redact_home(report.binary), "version": report.version,
         "ok": report.ok, "error": report.error,
         "intake_url": report.intake_url,
         "client_token_prefix": report.client_token_prefix,

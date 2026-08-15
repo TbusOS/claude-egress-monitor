@@ -49,6 +49,17 @@ class TestInline(unittest.TestCase):
         got = build_docs.render_inline("见 [这节](03-routing.md#陷阱一)")
         self.assertIn('href="03-routing.html#陷阱一"', got)
 
+    def test_link_escaping_docs_goes_to_github_source(self):
+        """Pages 只发布 docs/，`../cem/net.py` 在站点上是 404。
+
+        而在 GitHub 上读 .md 源文件时它是对的 —— 所以只能在生成 HTML 时
+        换成绝对的源码地址，两边都通。
+        """
+        got = build_docs.render_inline("实现在 [`cem/net.py`](../cem/net.py)")
+        self.assertIn("github.com/TbusOS/claude-egress-monitor/blob/main/cem/net.py",
+                      got)
+        self.assertNotIn('href="../cem', got)
+
     def test_external_link_is_untouched(self):
         got = build_docs.render_inline("[清单](https://example.com/a.md)")
         self.assertIn('href="https://example.com/a.md"', got)

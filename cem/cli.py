@@ -292,7 +292,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
     httpd, sampler, history, _bus = build_server(
         host=args.host, port=args.port, history=history, sampler=sampler,
-        day_store=day_store,
+        day_store=day_store, demo=args.demo,
     )
     if args.demo:
         from . import demo

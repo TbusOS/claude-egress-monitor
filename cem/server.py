@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
+from . import demo as demo_mod
 from . import endpoints as ep
 from . import history as histmod
 from . import view
@@ -91,6 +92,7 @@ class _Handler(BaseHTTPRequestHandler):
     web_root: Path
     day_store: object
     pathwatch: PathWatcher
+    demo: bool
 
     def log_message(self, fmt: str, *args) -> None:      # noqa: A003
         """默认的 stderr 访问日志会把每次 SSE 心跳都刷出来，关掉。"""
@@ -177,7 +179,10 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/telemetry":
             # 这一项要跑 strings 扫一个 300MB 的文件，比较慢，
             # 所以不塞进 /api/state，单独按需拉。
-            self._send_json(view.telemetry_payload())
+            # 演示模式绝不去读本机装的 Claude Code —— 那会把版本号和
+            # 安装路径放进一个准备被截图公开的界面里。
+            self._send_json(demo_mod.telemetry() if self.demo
+                            else view.telemetry_payload())
         elif path == "/api/status":
             self._send_json(self.sampler.status())
         elif path == "/api/stream":
@@ -206,6 +211,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._path_auto()
         elif path == "/api/path/sweep":
             self._send_json(self.pathwatch.sweep_soon())
+        elif path == "/api/path/cancel":
+            self._send_json(self.pathwatch.cancel())
         elif path == "/api/sample":
             sample = self.sampler.sample_now()
             self.bus.publish(view.snapshot(self.history, self.sampler,
@@ -369,6 +376,7 @@ def build_server(
     web_root: Path = WEB_ROOT,
     day_store=None,
     pathwatch: Optional[PathWatcher] = None,
+    demo: bool = False,
 ) -> tuple[ThreadingHTTPServer, Sampler, History, Broadcaster]:
     hist = history or History()
     bus = Broadcaster()
@@ -386,7 +394,7 @@ def build_server(
 
     handler = type("Handler", (_Handler,), {
         "history": hist, "sampler": smp, "bus": bus, "web_root": web_root,
-        "day_store": day_store, "pathwatch": watcher,
+        "day_store": day_store, "pathwatch": watcher, "demo": demo,
     })
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

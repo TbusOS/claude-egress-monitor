@@ -1669,12 +1669,22 @@
   }
 
   var pathPoll = null;
+  // 按钮的忙态放在模块级，不跟着某一次调用走。
+  // 早先它是 watchSweep 的参数，于是「点了全部测一遍，再拨自动探测开关」
+  // 会让第二次调用顶掉第一次的轮询，把按钮永远留在"探测中"且禁用 ——
+  // 用户看到的就是"卡住了，还关不掉"。
+  var pathBtn = null;
 
   function fetchPath() {
     return fetch('/api/path', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         renderPathQuality(data);
+        var st = (data && data.status) || {};
+        // 自愈：刷新页面时服务端可能正跑着，这里接上轮询；
+        // 反过来服务端已经停了而按钮还卡在忙态的话，把它放掉。
+        if ((st.sweeping || st.running) && !pathPoll) watchSweep();
+        if (!st.sweeping && pathBtn && !pathPoll) releasePathButton(data);
         return data;
       })
       .catch(function (err) {
@@ -1683,45 +1693,77 @@
       });
   }
 
-  /** 一遍要跑一两分钟，所以跑的时候轮询看进度，跑完就停。
-   *  轮询期间按钮停在"探测中 N/M"，结果一条一条冒出来。 */
-  function watchSweep(releaseBtn) {
-    if (pathPoll) { window.clearInterval(pathPoll); pathPoll = null; }
+  function releasePathButton(data) {
+    if (!pathBtn) return;
+    var n = ((data && data.rows) || []).length;
+    pathBtn.done(n ? '测完了 · ' + n + ' 条' : '测完了',
+                 n ? 'done · ' + n + ' paths' : 'done');
+    pathBtn = null;
+  }
+
+  /** 一遍要跑一两分钟，所以跑的时候轮询看进度，跑完就停。 */
+  function watchSweep() {
+    if (pathPoll) return;                 // 已经在轮询了，别叠第二个
     pathPoll = window.setInterval(function () {
       fetchPath().then(function (data) {
         var st = (data && data.status) || {};
         if (st.sweeping) {
-          if (releaseBtn) releaseBtn.tick(st);
+          if (pathBtn) pathBtn.tick(st);
           return;
         }
+        releasePathButton(data);
         if (!st.running) {
           window.clearInterval(pathPoll);
           pathPoll = null;
-        }
-        if (releaseBtn) {
-          var n = ((data && data.rows) || []).length;
-          releaseBtn.done(n ? '测完了 · ' + n + ' 条' : '测完了',
-                          n ? 'done · ' + n + ' paths' : 'done');
-          releaseBtn = null;
         }
       });
     }, 1500);
   }
 
-  /** 带进度文字的按钮忙态：文案跟着 N/M 走。 */
+  function stopWatchingSweep() {
+    if (pathPoll) { window.clearInterval(pathPoll); pathPoll = null; }
+    if (pathBtn) { pathBtn.done(); pathBtn = null; }
+  }
+
+  /** 跑的时候按钮变成「停止」—— 一个停不下来的长任务读起来就是卡死。 */
   function sweepButtonState(btn) {
-    var release = busy(btn, '探测中', 'probing');
+    var saved = Array.prototype.slice.call(btn.childNodes);
+    var width = btn.offsetWidth;
+    if (width) btn.style.minWidth = width + 'px';
+    btn.setAttribute('data-busy', '1');
+    clear(btn);
+    var label = biSpan('探测中', 'probing', 'btn-state__label');
+    btn.appendChild(el('span', { class: 'btn-state' }, [spinner(), label]));
+    // 刻意**不 disable**：这一刻它是「停止」按钮，必须能点。
+    btn.setAttribute('data-mode', 'stop');
+
+    var released = false;
     return {
       tick: function (st) {
-        if (!btn || !st.total) return;
-        var label = btn.querySelector('.btn-state__label');
-        if (label) {
-          clear(label);
-          label.appendChild(bi('探测中 ' + (st.done || 0) + '/' + st.total,
-                               'probing ' + (st.done || 0) + '/' + st.total));
-        }
+        if (!st.total) return;
+        clear(label);
+        label.appendChild(bi('停止（' + (st.done || 0) + '/' + st.total + '）',
+                             'stop (' + (st.done || 0) + '/' + st.total + ')'));
       },
-      done: function (zh, en) { release(zh, en); }
+      done: function (zh, en) {
+        if (released) return;
+        released = true;
+        btn.removeAttribute('data-busy');
+        btn.removeAttribute('data-mode');
+        function back() {
+          clear(btn);
+          saved.forEach(function (n) { btn.appendChild(n); });
+          btn.removeAttribute('data-done');
+          btn.style.minWidth = '';
+        }
+        if (!zh) { back(); return; }
+        btn.setAttribute('data-done', '1');
+        clear(btn);
+        btn.appendChild(el('span', { class: 'btn-state' }, [
+          el('span', { 'aria-hidden': 'true' }, ['✓']), biSpan(zh, en || zh)
+        ]));
+        window.setTimeout(back, 1600);
+      }
     };
   }
 
@@ -1729,11 +1771,19 @@
     var sweep = q('path-sweep');
     if (sweep) {
       sweep.addEventListener('click', function () {
-        var state = sweepButtonState(sweep);
+        // 正在跑 → 这一下是「停止」
+        if (sweep.getAttribute('data-mode') === 'stop') {
+          post('/api/path/cancel', {})
+            .then(fetchPath)
+            .then(function (data) { releasePathButton(data); })
+            .catch(function () { stopWatchingSweep(); });
+          return;
+        }
+        pathBtn = sweepButtonState(sweep);
         post('/api/path/sweep', {})
           .then(function () { return fetchPath(); })
-          .then(function () { watchSweep(state); })
-          .catch(function () { state.done(); });
+          .then(watchSweep)
+          .catch(function () { stopWatchingSweep(); });
       });
     }
 
@@ -1752,8 +1802,8 @@
         }).then(function () {
           return fetchPath();
         }).then(function () {
-          if (want) watchSweep(null);
-          else if (pathPoll) { window.clearInterval(pathPoll); pathPoll = null; }
+          if (want) watchSweep();
+          else stopWatchingSweep();      // 关掉时连按钮忙态一起收干净
         }).catch(function () {
           sw.classList.toggle('is-on', !want);
           sw.setAttribute('aria-checked', want ? 'false' : 'true');

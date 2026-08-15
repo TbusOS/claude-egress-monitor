@@ -229,6 +229,8 @@
   @keyframes btn-spin { to { transform: rotate(360deg); } }
   .atl-btn[data-busy] { cursor: progress; }
   .atl-btn[data-done] { cursor: default; }
+  /* 长任务的按钮在跑的时候变成「停止」，所以它必须还能点。 */
+  .atl-btn[data-mode="stop"] { cursor: pointer; }
 
   /* 开关按下去到服务端确认之间的那一小段。没有它，慢一点的往返里
      开关会停在旧位置，看起来就是"点了没用"。 */

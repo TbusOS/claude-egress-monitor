@@ -125,7 +125,7 @@ def _connections() -> tuple[Connection, ...]:
     )
     out = [
         Connection(
-            pid=1001, command="2.1.x", surface="cli", local="192.0.2.9:51234",
+            pid=1001, command="0.0.0-demo", surface="cli", local="192.0.2.9:51234",
             remote_ip="192.0.2.40", remote_port=443, kind="real",
             host="api.anthropic.com", service="api", asn=anthropic,
         )
@@ -133,7 +133,7 @@ def _connections() -> tuple[Connection, ...]:
     ]
     out += [
         Connection(
-            pid=1001, command="2.1.x", surface="cli", local="198.18.0.1:51851",
+            pid=1001, command="0.0.0-demo", surface="cli", local="198.18.0.1:51851",
             remote_ip="198.18.0.140", remote_port=443, kind="fake-ip",
             host="http-intake.logs.us5.datadoghq.com", service="telemetry",
         )
@@ -200,6 +200,47 @@ def paths():
     )
 
 
+def telemetry() -> dict:
+    """演示用的遥测提取结果 —— **完全虚构**。
+
+    为什么要有这一份：`view.telemetry_payload()` 会去读本机真实安装的
+    Claude Code。那在演示模式下是不该发生的 —— 演示模式承诺"什么都不碰"，
+    而这一个按钮会读一个几百 MB 的本地文件，并把版本号、安装路径这些
+    本机事实放到界面上（而界面是要被截图公开的）。
+
+    形状照着 `telemetry.to_json()` 来，值全部编造：token 是明显的假串，
+    版本号写成 `0.0.0-demo`，一眼能看出不是真的。
+    """
+    return {
+        "binary": "~/.local/share/claude/versions/0.0.0-demo",
+        "version": "0.0.0-demo",
+        "ok": True,
+        "error": None,
+        "intake_url": "https://http-intake.logs.us5.datadoghq.com/api/v2/logs",
+        "client_token_prefix": "pubdemo0000…",
+        "flush_interval_ms": 15000,
+        "batch_limit": 100,
+        "envelope": [
+            {"key": "ddsource", "value": "nodejs"},
+            {"key": "service", "value": "claude-code"},
+            {"key": "hostname", "value": "claude-code"},
+            {"key": "env", "value": "external"},
+        ],
+        "payload_fields": ["feature_name", "head_sha", "http_status",
+                           "http_status_range", "model", "version"],
+        "event_names": ["tengu_api_success", "tengu_api_error",
+                        "tengu_bash_tool_command_executed",
+                        "tengu_agent_dispatch", "tengu_adopt"],
+        "behaviours": [
+            {"name": "stripPiiFieldsForDatadog", "meaning": "上报前过滤掉 PII 字段"},
+            {"name": "trackDatadogEvent", "meaning": "单个事件的上报入口"},
+        ],
+        "env_vars": ["CLAUDE_CODE_ENABLE_TELEMETRY", "DISABLE_TELEMETRY"],
+        "limits": "演示数据：这一份是编的，不是从任何人的机器上提取的。"
+                  "真实提取请不带 --demo 跑，并注意结果里有本机安装的版本号。",
+    }
+
+
 def seed(history, sampler=None, count: int = len(JITTERS)) -> int:
     """往 History 里塞几轮演示采样，返回塞了几轮。
 
@@ -213,4 +254,4 @@ def seed(history, sampler=None, count: int = len(JITTERS)) -> int:
     return count
 
 
-__all__ = ["DEMO_NOTICE", "sample"]
+__all__ = ["DEMO_NOTICE", "sample", "telemetry"]

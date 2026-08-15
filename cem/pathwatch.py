@@ -94,6 +94,9 @@ class PathWatcher:
         self._config = config or WatchConfig()
         self._lock = threading.Lock()
         self._wake = threading.Event()
+        # 取消信号。一遍要跑一两分钟，中途必须能叫停 ——
+        # 一个停不下来的长任务，用户读到的就是"这个界面卡死了"。
+        self._cancel = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._sweeping = False
@@ -154,16 +157,25 @@ class PathWatcher:
         return self.status()
 
     def stop(self) -> dict:
+        """关掉自动探测，并叫停正在跑的那一遍。
+
+        「关掉之后还要再跑一两分钟」在界面上就是「关不掉」。所以这里
+        连同在途的那一遍一起取消，最多再等当前这一个目标跑完。
+        """
         with self._lock:
             self._running = False
+        self._cancel.set()
         self._wake.set()
         thread = self._thread
         if thread and thread.is_alive() and thread is not threading.current_thread():
-            # 一遍 sweep 可能要一两分钟，不等它跑完 —— 循环自己会在
-            # 每个目标之间检查 running，最多再多跑一个目标就退出。
             thread.join(timeout=2)
         with self._lock:
             self._thread = None
+        return self.status()
+
+    def cancel(self) -> dict:
+        """只叫停在途的那一遍，不动自动探测的开关。"""
+        self._cancel.set()
         return self.status()
 
     def set_interval(self, seconds: int) -> dict:
@@ -181,6 +193,7 @@ class PathWatcher:
         with self._lock:
             if self._sweeping:
                 return self.status()
+        self._cancel.clear()
         threading.Thread(target=self._sweep_guarded,
                          name="cem-pathsweep", daemon=True).start()
         return self.status()
@@ -213,12 +226,15 @@ class PathWatcher:
                 self._total = len(groups)
             fresh: dict[str, dict] = {}
             for group in groups:
-                if not self.running and self._sweeps > 0:
-                    # 关掉开关之后不再往下测；第一遍（手动触发）跑完整。
+                # 每个目标之前检查一次取消。**不再区分"第一遍"** ——
+                # 早先的写法是第一遍跑完整、之后才可中断，结果就是
+                # 刚打开就关掉的话要再等一两分钟，界面上读作"关不掉"。
+                if self._cancel.is_set():
                     break
                 with self._lock:
                     self._current = group.probe_target
-                report = pathtrace.trace(group.probe_target, cycles=cycles)
+                report = pathtrace.trace(group.probe_target, cycles=cycles,
+                                         cancel=self._cancel)
                 row = pathtrace.summarize(report)
                 row["hosts"] = list(group.hosts)
                 row["shared"] = len(group.hosts) > 1
@@ -229,11 +245,12 @@ class PathWatcher:
                     # 等一分半钟再一次性全出，和"点了没反应"是同一种体验。
                     self._results = dict(fresh)
                     self._done += 1
+            cancelled = self._cancel.is_set()
             with self._lock:
                 self._results = fresh
                 self._last_sweep_ts = time.time()
                 self._sweeps += 1
-                self._last_error = None
+                self._last_error = "上一遍被中途停掉了" if cancelled else None
                 self._current = None
         finally:
             with self._lock:
@@ -243,7 +260,10 @@ class PathWatcher:
     def _loop(self) -> None:
         while self.running:
             started = time.monotonic()
+            self._cancel.clear()
             self._sweep_guarded()
+            if not self.running:
+                break
             with self._lock:
                 interval = self._config.interval_s
             # 一遍本身可能就跑了一分钟，剩多少等多少，不叠加。
